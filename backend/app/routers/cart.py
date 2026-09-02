@@ -167,12 +167,19 @@ async def add_item(
 
     await _write_audit(
         db, session_id, "cart.item_added",
-        {"product_id": body.product_id, "product_name": product.name, "quantity": body.quantity, "unit_price": float(product.price)},
+        {
+            "product_id": body.product_id,
+            "product_name": product.name,
+            "quantity": body.quantity,
+            "unit_price": float(product.price),
+        },
     )
     await db.commit()
 
     session = await _get_session_or_404(session_id, db)
-    logger.info("Item added to cart", extra={"session_id": str(session_id), "product_id": body.product_id})
+    logger.info(
+        "Item added to cart", extra={"session_id": str(session_id), "product_id": body.product_id}
+    )
     return _build_cart_out(session)
 
 
@@ -203,5 +210,7 @@ async def remove_item(
     await db.commit()
 
     session = await _get_session_or_404(session_id, db)
-    logger.info("Item removed from cart", extra={"session_id": str(session_id), "product_id": product_id})
+    logger.info(
+        "Item removed from cart", extra={"session_id": str(session_id), "product_id": product_id}
+    )
     return _build_cart_out(session)

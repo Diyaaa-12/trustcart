@@ -1,4 +1,4 @@
-"""
+﻿"""
 Razorpay order creation service.
 
 Features:
@@ -24,7 +24,7 @@ class RazorpayServiceError(Exception):
 
 
 def _create_order_sync(key_id: str, key_secret: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Synchronous Razorpay call — run in thread pool."""
+    """Synchronous Razorpay call â€” run in thread pool."""
     import razorpay
 
     client = razorpay.Client(auth=(key_id, key_secret))
@@ -58,7 +58,7 @@ async def create_order(
 
     if settings.mock_checkout:
         mock_id = f"mock_order_{receipt or uuid.uuid4().hex[:8]}"
-        logger.info("Razorpay mock mode — returning fake order", extra={"order_id": mock_id})
+        logger.info("Razorpay mock mode â€” returning fake order", extra={"order_id": mock_id})
         return {
             "id": mock_id,
             "amount": amount_paise,
@@ -67,12 +67,19 @@ async def create_order(
             "mock": True,
         }
 
-    payload = {"amount": amount_paise, "currency": currency, "receipt": receipt or str(uuid.uuid4())}
+    payload = {
+        "amount": amount_paise,
+        "currency": currency,
+        "receipt": receipt or str(uuid.uuid4()),
+    }
 
     async def _attempt() -> dict[str, Any]:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, _create_order_sync, settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET, payload
+            None, _create_order_sync,
+            settings.RAZORPAY_KEY_ID,
+            settings.RAZORPAY_KEY_SECRET,
+            payload,
         )
 
     # First attempt
@@ -102,3 +109,4 @@ async def create_order(
             f"Razorpay order creation failed after retry: {second_exc}",
             retried=True,
         ) from second_exc
+

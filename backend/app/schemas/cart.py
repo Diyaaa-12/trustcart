@@ -2,7 +2,7 @@
 import uuid
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AddItemRequest(BaseModel):

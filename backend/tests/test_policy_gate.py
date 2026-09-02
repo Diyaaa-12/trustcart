@@ -13,8 +13,6 @@ Coverage targets:
 """
 from decimal import Decimal
 
-import pytest
-
 from app.services.policy_gate import (
     CatalogProduct,
     PolicyConfig,
@@ -184,11 +182,14 @@ class TestCategoryMapping:
         assert result.passed is False
         assert result.rejected_items[0].reason == RejectionReason.CATEGORY_NOT_ALLOWED
 
-    def test_same_category_upsell_allowed(self, default_config, sample_catalog, electronics_cart):
-        """Another Electronics product (Books is allowed, but Electronics itself is same-category)."""
+    def test_same_category_upsell_allowed(
+        self, default_config, sample_catalog, electronics_cart
+    ):
+        """Another Electronics product (Books allowed; Electronics itself is same-category)."""
         # Add another Electronics product to the catalog for this test
         extended = {**sample_catalog, 10: CatalogProduct(
-            id=10, name="USB Hub", price=Decimal("2499"), category="Electronics", stock=100, is_active=True
+            id=10, name="USB Hub", price=Decimal("2499"),
+            category="Electronics", stock=100, is_active=True
         )}
         result = run_gate(
             proposed_items=[_item(10, "5.0")],
@@ -299,7 +300,9 @@ class TestDiscountThresholds:
 # 5. Session budget checks
 # ===========================================================================
 class TestSessionBudget:
-    def test_budget_exactly_at_limit_accepted(self, default_config, sample_catalog, electronics_cart):
+    def test_budget_exactly_at_limit_accepted(
+        self, default_config, sample_catalog, electronics_cart
+    ):
         """Budget exactly at max (10%) → accepted."""
         result = run_gate(
             proposed_items=[_item(2, "10.0")],
@@ -351,7 +354,9 @@ class TestSessionBudget:
         assert result.passed is True
         assert result.new_budget_used_pct == Decimal("10.0")
 
-    def test_budget_accumulates_across_proposals(self, default_config, sample_catalog, electronics_cart):
+    def test_budget_accumulates_across_proposals(
+        self, default_config, sample_catalog, electronics_cart
+    ):
         """
         Simulate two sequential gate calls sharing a budget.
         Call 1: 6% accepted → budget = 6%.
@@ -412,7 +417,9 @@ class TestProposalCountCap:
         # id=3 (Footwear) rejected by category, but the count cap is not triggered
         assert len(result.accepted_items) + len(result.rejected_items) == 3
 
-    def test_overflow_proposals_rejected_with_reason(self, default_config, sample_catalog, electronics_cart):
+    def test_overflow_proposals_rejected_with_reason(
+        self, default_config, sample_catalog, electronics_cart
+    ):
         """4 proposals when max=3 → item 4 rejected with PROPOSAL_COUNT_EXCEEDED."""
         result = run_gate(
             proposed_items=[_item(2, "2.0"), _item(5, "2.0"), _item(3, "2.0"), _item(4, "2.0")],
@@ -465,7 +472,9 @@ class TestMixedBatch:
         assert result.rejected_items[0].product_id == 3
         assert result.rejected_items[0].reason == RejectionReason.CATEGORY_NOT_ALLOWED
 
-    def test_first_item_uses_budget_second_rejected(self, default_config, sample_catalog, electronics_cart):
+    def test_first_item_uses_budget_second_rejected(
+        self, default_config, sample_catalog, electronics_cart
+    ):
         """
         Budget = 10. Item 1: 7% accepted. Item 2: 5% rejected (7+5=12 > 10).
         Budget after = 7 (only item 1 consumed budget).
@@ -488,7 +497,9 @@ class TestMixedBatch:
 # 8. Prompt-injection scenario (preview of Phase 2 test)
 # ===========================================================================
 class TestPromptInjection:
-    def test_injection_item_90pct_discount_rejected(self, default_config, sample_catalog, electronics_cart):
+    def test_injection_item_90pct_discount_rejected(
+        self, default_config, sample_catalog, electronics_cart
+    ):
         """
         The demo fixture (id=99) has an injection string in its name.
         Even if the LLM outputs it with 90% discount, the gate catches it:
@@ -538,7 +549,10 @@ class TestPromptInjection:
         """
         # Catalog that does NOT contain the fixture
         minimal_catalog = {
-            1: CatalogProduct(id=1, name="Headphones", price=Decimal("8999"), category="Electronics", stock=50, is_active=True),
+            1: CatalogProduct(
+                id=1, name="Headphones", price=Decimal("8999"),
+                category="Electronics", stock=50, is_active=True,
+            ),
         }
         result = run_gate(
             proposed_items=[ProposedItem(product_id=99, discount_pct=Decimal("90.0"))],

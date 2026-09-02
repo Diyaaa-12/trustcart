@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -56,7 +56,9 @@ router = APIRouter(prefix="/proposals", tags=["proposals"])
 # ---------------------------------------------------------------------------
 async def _get_session_or_404(session_id: uuid.UUID, db: AsyncSession) -> CartSession:
     result = await db.execute(
-        select(CartSession).options(selectinload(CartSession.items).selectinload(CartItem.product)).where(CartSession.id == session_id)
+        select(CartSession)
+        .options(selectinload(CartSession.items).selectinload(CartItem.product))
+        .where(CartSession.id == session_id)
     )
     session = result.scalar_one_or_none()
     if session is None:
@@ -358,7 +360,9 @@ async def record_user_action(
         )
 
     session_result = await db.execute(
-        select(CartSession).options(selectinload(CartSession.items).selectinload(CartItem.product)).where(CartSession.id == session_id)
+        select(CartSession)
+        .options(selectinload(CartSession.items).selectinload(CartItem.product))
+        .where(CartSession.id == session_id)
     )
     session = session_result.scalar_one_or_none()
     current_tier = session.autonomy_tier if session else AutonomyTier.HIGH
@@ -372,7 +376,7 @@ async def record_user_action(
     if proposal.user_action == "review_required":
         if body.action in ("reviewed", "confirm", "confirmed", "review"):
             proposal.user_action = "reviewed"
-            proposal.acted_at = datetime.now(timezone.utc)
+            proposal.acted_at = datetime.now(UTC)
             await _write_audit(db, session_id, "user.reviewed", {
                 "proposal_id": str(proposal_id),
                 "autonomy_tier": current_tier.value,
@@ -390,7 +394,7 @@ async def record_user_action(
     elif proposal.user_action in ("pending", "reviewed"):
         if body.action in ("accepted", "declined"):
             proposal.user_action = body.action
-            proposal.acted_at = datetime.now(timezone.utc)
+            proposal.acted_at = datetime.now(UTC)
 
             if body.action == "accepted" and proposal.accepted_items and session:
                 total_disc = sum(
@@ -473,3 +477,4 @@ async def record_user_action(
         counterfactual=counterfactual,
         created_at=proposal.created_at,
     )
+

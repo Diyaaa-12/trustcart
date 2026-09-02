@@ -12,9 +12,8 @@ Demonstrates:
 """
 import uuid
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -146,11 +145,15 @@ class TestLiveCheckout:
     async def test_happy_path_live(self, client, seeded_session_id):
         """With mocked Razorpay SDK returning a real-looking order."""
         session_id, _ = seeded_session_id
-        fake_order = {"id": "order_ABCDEF123456", "amount": 1_799_800, "currency": "INR", "status": "created"}
+        fake_order = {
+            "id": "order_ABCDEF123456", "amount": 1_799_800,
+            "currency": "INR", "status": "created",
+        }
 
         with patch("app.config.settings.RAZORPAY_KEY_ID", "rzp_test_fake_key"):
             with patch("app.config.settings.RAZORPAY_KEY_SECRET", "fake_secret"):
-                with patch("app.services.razorpay_service._create_order_sync", return_value=fake_order):
+                patch_target = "app.services.razorpay_service._create_order_sync"
+                with patch(patch_target, return_value=fake_order):
                     response = await client.post(f"/api/checkout/{session_id}")
 
         assert response.status_code == 200
@@ -172,7 +175,10 @@ class TestCheckoutRetry:
     async def test_first_fails_retry_succeeds(self, client, seeded_session_id):
         """First Razorpay call raises, retry succeeds — result is 200."""
         session_id, _ = seeded_session_id
-        fake_order = {"id": "order_RETRY_OK", "amount": 1_799_800, "currency": "INR", "status": "created"}
+        fake_order = {
+            "id": "order_RETRY_OK", "amount": 1_799_800,
+            "currency": "INR", "status": "created",
+        }
 
         call_count = 0
 
@@ -185,7 +191,8 @@ class TestCheckoutRetry:
 
         with patch("app.config.settings.RAZORPAY_KEY_ID", "rzp_test_fake_key"):
             with patch("app.config.settings.RAZORPAY_KEY_SECRET", "fake_secret"):
-                with patch("app.services.razorpay_service._create_order_sync", side_effect=flaky_create):
+                patch_target = "app.services.razorpay_service._create_order_sync"
+                with patch(patch_target, side_effect=flaky_create):
                     response = await client.post(f"/api/checkout/{session_id}")
 
         assert response.status_code == 200
@@ -204,7 +211,8 @@ class TestCheckoutRetry:
 
         with patch("app.config.settings.RAZORPAY_KEY_ID", "rzp_test_fake_key"):
             with patch("app.config.settings.RAZORPAY_KEY_SECRET", "fake_secret"):
-                with patch("app.services.razorpay_service._create_order_sync", side_effect=always_fail):
+                patch_target = "app.services.razorpay_service._create_order_sync"
+                with patch(patch_target, side_effect=always_fail):
                     response = await client.post(f"/api/checkout/{session_id}")
 
         assert response.status_code == 402

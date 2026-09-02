@@ -11,7 +11,6 @@ Cart is NEVER destroyed on checkout failure — the user can retry.
 """
 import logging
 import uuid
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select

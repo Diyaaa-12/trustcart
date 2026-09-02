@@ -1,8 +1,7 @@
 """Pydantic schemas for checkout endpoints."""
 import uuid
-from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class CheckoutRequest(BaseModel):

@@ -36,8 +36,8 @@ class Base(DeclarativeBase):
 async def create_tables() -> None:
     """Create all tables on startup (dev/demo use; use Alembic for prod)."""
     # Import models so they register with Base.metadata
-    import app.models.product  # noqa: F401
     import app.models.cart  # noqa: F401
+    import app.models.product  # noqa: F401
     import app.models.proposal  # noqa: F401
 
     async with engine.begin() as conn:
@@ -45,9 +45,12 @@ async def create_tables() -> None:
         # Ensure trust_score column exists if table was already created in PostgreSQL
         try:
             await conn.execute(
-                text("ALTER TABLE cart_sessions ADD COLUMN IF NOT EXISTS trust_score NUMERIC(6, 2) NOT NULL DEFAULT 100")
+                text(
+                    "ALTER TABLE cart_sessions ADD COLUMN IF NOT EXISTS "
+                    "trust_score NUMERIC(6, 2) NOT NULL DEFAULT 100"
+                )
             )
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
 

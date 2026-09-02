@@ -11,13 +11,13 @@ Lifespan:
 """
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import create_tables
@@ -65,7 +65,7 @@ app.add_middleware(
 
 # ── Request ID middleware ────────────────────────────────────────────────────
 @app.middleware("http")
-async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+async def request_id_middleware(request: Request, call_next: Any) -> Response:
     """Attach a request ID to every request for end-to-end tracing."""
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     structlog.contextvars.bind_contextvars(

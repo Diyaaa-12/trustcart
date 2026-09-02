@@ -16,8 +16,10 @@ ignore = [
     "ANN102",  # missing type annotation for cls
     "ANN401",  # Dynamically typed expressions (Any)
     "S101",    # use of assert (fine in tests)
+    "B008",    # function call in argument defaults (FastAPI Depends)
+    "B904",    # raise ... from ... in except clause
 ]
-per-file-ignores = { "tests/*" = ["ANN", "S"] }
+per-file-ignores = { "tests/*" = ["ANN", "S"], "app/seed.py" = ["E501"] }
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

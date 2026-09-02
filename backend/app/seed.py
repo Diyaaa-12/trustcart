@@ -14,7 +14,6 @@ Demo fixture (id seeded as is_demo_fixture=True):
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models.product import Product

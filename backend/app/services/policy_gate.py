@@ -1,33 +1,32 @@
-"""
+﻿"""
 TrustCart Policy Gate
 =====================
 The single most important module in the project.
 
-This is a **pure, deterministic function** — no database, no LLM calls,
+This is a **pure, deterministic function** â€” no database, no LLM calls,
 no network I/O, no side effects. It receives data and returns a structured
 result. This design makes it:
 
   1. Trivially unit-testable (no mocks needed, ever).
-  2. Impossible for LLM output to bypass — the gate always runs after the
+  2. Impossible for LLM output to bypass â€” the gate always runs after the
      agent, and the agent cannot call or modify the gate.
-  3. Auditable — every rejection has a machine-readable reason code.
+  3. Auditable â€” every rejection has a machine-readable reason code.
 
 Safety guarantee: even if a prompt-injection attack causes the LLM to
 output "apply 90% discount", the gate rejects it because 90 > MAX_ITEM_DISCOUNT_PCT.
 The LLM can only *nominate* candidates; the gate *decides*.
 
 Cross-sell category mappings:
-    Electronics  → Accessories, Books
-    Accessories  → Electronics, Clothing
-    Clothing     → Footwear, Accessories
-    Footwear     → Clothing, Accessories
-    Books        → Electronics, Accessories
+    Electronics  â†’ Accessories, Books
+    Accessories  â†’ Electronics, Clothing
+    Clothing     â†’ Footwear, Accessories
+    Footwear     â†’ Clothing, Accessories
+    Books        â†’ Electronics, Accessories
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Default category cross-sell map
@@ -44,7 +43,7 @@ DEFAULT_CATEGORY_CROSS_SELL_MAP: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
-class RejectionReason(str, Enum):
+class RejectionReason(StrEnum):
     """Machine-readable reason codes for gate rejections."""
 
     PRODUCT_NOT_IN_CATALOG = "product_not_in_catalog"
@@ -205,7 +204,7 @@ def run_gate(
     cart_product_ids = {item["product_id"] for item in cart_items}
     running_budget = session_budget_used_pct
 
-    # ── Check 1: Batch-level proposal count cap ────────────────────────────
+    # â”€â”€ Check 1: Batch-level proposal count cap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â
     # Reject the excess items up front before individual checks.
     if len(proposed_items) > config.max_proposals_per_cart:
         overflow = proposed_items[config.max_proposals_per_cart :]
@@ -223,7 +222,7 @@ def run_gate(
             )
         proposed_items = proposed_items[: config.max_proposals_per_cart]
 
-    # ── Per-item checks (in order; budget consumed greedily) ───────────────
+    # â”€â”€ Per-item checks (in order; budget consumed greedily) â”€â”€â”€â”€â”€â”€â”€â”€
     for item in proposed_items:
         product = catalog.get(item.product_id)
 
@@ -304,7 +303,7 @@ def run_gate(
             continue
 
         # Check 8: Item-level discount cap
-        # ── THIS IS THE PROMPT-INJECTION SAFETY NET ──
+        # â”€â”€ THIS IS THE PROMPT-INJECTION SAFETY NET â”€â”€
         # Even if the LLM outputs "discount_pct: 90" due to an injection attack,
         # this check catches it because 90 > max_item_discount_pct (default: 20).
         if item.discount_pct > config.max_item_discount_pct:
@@ -338,7 +337,7 @@ def run_gate(
             )
             continue
 
-        # ── All checks passed ──
+        # â”€â”€ All checks passed â”€â”€
         running_budget += item.discount_pct
         accepted.append(item)
 
