@@ -24,6 +24,16 @@ class CartItemOut(BaseModel):
     line_total: Decimal
 
 
+class MandateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    fingerprint: str
+    max_cumulative_discount_pct: float
+    max_items_per_proposal: int
+    expires_at: str
+    status: str  # "active" | "expired"
+
+
 class CartOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,6 +46,8 @@ class CartOut(BaseModel):
     # Trust-adaptive autonomy fields
     trust_score: Decimal
     autonomy_tier: str  # "high" | "medium" | "low"
+    # Cryptographic spend mandate (AP2)
+    mandate: MandateOut | None = None
 
 
 class RemoveItemRequest(BaseModel):

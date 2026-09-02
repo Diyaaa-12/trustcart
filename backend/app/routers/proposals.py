@@ -177,10 +177,52 @@ async def generate_proposals(
         "autonomy_tier": current_tier.value,
     })
 
+    # Ensure session has a valid mandate (auto-issued on first proposal if missing)
+    from app.services.mandate import (
+        compute_mandate_fingerprint,
+        create_mandate,
+        mandate_to_dict,
+        verify_mandate,
+    )
+
+    if session.mandate_payload is None:
+        mandate_obj, signature = create_mandate(
+            session_id=session.id,
+            secret=settings.MANDATE_SECRET,
+            max_cumulative_discount_pct=settings.MAX_DISCOUNT_BUDGET_PCT,
+            max_items_per_proposal=settings.MAX_PROPOSALS_PER_CART,
+            ttl_minutes=settings.MANDATE_TTL_MINUTES,
+        )
+        session.mandate_payload = mandate_to_dict(mandate_obj)
+        session.mandate_signature = signature
+        await _write_audit(db, session_id, "mandate.issued", {
+            "mandate_fingerprint": compute_mandate_fingerprint(session.mandate_payload),
+            "max_cumulative_discount_pct": float(mandate_obj.max_cumulative_discount_pct),
+            "max_items": mandate_obj.max_items_per_proposal,
+            "expires_at": mandate_obj.expires_at,
+            "issued_at": mandate_obj.issued_at,
+        })
+        await db.commit()
+
+    # Verify spend mandate (AP2 protocol checkpoint)
+    mandate_fp = compute_mandate_fingerprint(session.mandate_payload)
+    is_m_valid, m_reason = verify_mandate(
+        mandate=session.mandate_payload,
+        signature=session.mandate_signature,
+        secret=settings.MANDATE_SECRET,
+    )
+    await _write_audit(db, session_id, "mandate.verified", {
+        "mandate_fingerprint": mandate_fp,
+        "is_valid": is_m_valid,
+        "verification_result": m_reason,
+    })
+
     config = PolicyConfig(
         max_discount_budget_pct=settings.MAX_DISCOUNT_BUDGET_PCT,
         max_proposals_per_cart=max_proposals,
         max_item_discount_pct=settings.MAX_ITEM_DISCOUNT_PCT,
+        require_mandate=True,
+        mandate_secret=settings.MANDATE_SECRET,
     )
     gate_result = run_gate(
         proposed_items=proposed_items,
@@ -188,6 +230,9 @@ async def generate_proposals(
         cart_items=cart_items_data,
         session_budget_used_pct=session.discount_budget_used_pct,
         config=config,
+        mandate=session.mandate_payload,
+        mandate_signature=session.mandate_signature,
+        mandate_secret=settings.MANDATE_SECRET,
     )
 
     gate_label = _gate_result_label(

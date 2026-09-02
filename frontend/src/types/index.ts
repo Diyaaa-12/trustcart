@@ -19,6 +19,14 @@ export interface CartItem {
   line_total: number;
 }
 
+export interface SpendMandate {
+  fingerprint: string;
+  max_cumulative_discount_pct: number;
+  max_items_per_proposal: number;
+  expires_at: string;
+  status: 'active' | 'expired';
+}
+
 export interface Cart {
   session_id: string;
   items: CartItem[];
@@ -28,6 +36,7 @@ export interface Cart {
   item_count: number;
   trust_score: number;
   autonomy_tier: 'high' | 'medium' | 'low';
+  mandate?: SpendMandate;
 }
 
 export interface AcceptedItem {
@@ -84,7 +93,7 @@ export interface CheckoutResult {
 export interface ReplayStep {
   step_number: number;
   timestamp: string;
-  category: 'cart' | 'agent' | 'gate' | 'trust' | 'user' | 'checkout' | 'system';
+  category: 'cart' | 'agent' | 'gate' | 'trust' | 'user' | 'checkout' | 'mandate' | 'system';
   title: string;
   summary: string;
   status: 'info' | 'success' | 'warning' | 'danger';

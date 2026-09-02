@@ -36,6 +36,25 @@ async def rich_event_session(client, audit_test_session):
     now = datetime.now(UTC)
 
     events_data = [
+
+        # 0b. mandate.verified (valid)
+        (
+            "mandate.verified",
+            {
+                "mandate_fingerprint": "mnd_12345678",
+                "is_valid": True,
+                "verification_result": "mandate_valid",
+            },
+        ),
+        # 0c. mandate.verified (invalid)
+        (
+            "mandate.verified",
+            {
+                "mandate_fingerprint": "mnd_bad_sig",
+                "is_valid": False,
+                "verification_result": "mandate_invalid",
+            },
+        ),
         # 1. cart.created
         ("cart.created", {"session_id": str(session_id)}),
         # 2. cart.item_added
@@ -212,18 +231,19 @@ class TestAuditTimeline:
         data = res.json()
 
         assert data["session_id"] == str(session_id)
-        assert data["total_events"] == 0
-        assert data["events"] == []
+        # 1 event from initial mandate.issued
+        assert data["total_events"] == 1
+        assert data["events"][0]["event_type"] == "mandate.issued"
         assert data["trust_score_history"] == []
-        assert data["replay_steps"] == []
+        assert len(data["replay_steps"]) == 1
+        assert data["replay_steps"][0]["category"] == "mandate"
         assert data["current_trust_score"] == 100.0
         assert data["current_autonomy_tier"] == "high"
 
         # Direct router handler invocation
         async with TestSessionLocal() as db:
             timeline = await get_session_timeline(session_id, db)
-            assert timeline.total_events == 0
-            assert timeline.events == []
+            assert timeline.total_events == 1
 
     @pytest.mark.asyncio
     async def test_get_timeline_happy_path(self, client, rich_event_session):
@@ -234,8 +254,8 @@ class TestAuditTimeline:
         data = res.json()
 
         assert data["session_id"] == str(session_id)
-        assert data["total_events"] == 18
-        assert len(data["events"]) == 18
+        assert data["total_events"] == 21
+        assert len(data["events"]) == 21
 
         # Verify trust score history extracted specifically from trust_score.updated events
         assert len(data["trust_score_history"]) == 4
@@ -245,12 +265,12 @@ class TestAuditTimeline:
         assert data["trust_score_history"][3]["delta"] == 0.0
 
         # Verify replay_steps populated on timeline
-        assert len(data["replay_steps"]) == 18
+        assert len(data["replay_steps"]) == 21
 
         # Direct router handler invocation
         async with TestSessionLocal() as db:
             timeline = await get_session_timeline(session_id, db)
-            assert timeline.total_events == 18
+            assert timeline.total_events == 21
             assert len(timeline.trust_score_history) == 4
 
 
@@ -278,16 +298,19 @@ class TestAuditReplay:
         data = res.json()
 
         assert data["session_id"] == str(session_id)
-        assert data["total_steps"] == 0
-        assert data["steps"] == []
+        # 1 step from mandate.issued
+        assert data["total_steps"] == 1
+        assert len(data["steps"]) == 1
+        assert data["steps"][0]["category"] == "mandate"
+        assert "Spend Mandate Issued" in data["steps"][0]["title"]
         assert data["current_trust_score"] == 100.0
         assert data["current_autonomy_tier"] == "high"
 
         # Direct router handler invocation
         async with TestSessionLocal() as db:
             replay = await get_session_replay(session_id, db)
-            assert replay.total_steps == 0
-            assert replay.steps == []
+            assert replay.total_steps == 1
+            assert replay.steps[0].category == "mandate" 
 
     @pytest.mark.asyncio
     async def test_get_replay_happy_path_all_categories(self, client, rich_event_session):
@@ -301,95 +324,111 @@ class TestAuditReplay:
         data = res.json()
 
         assert data["session_id"] == str(session_id)
-        assert data["total_steps"] == 18
+        assert data["total_steps"] == 21
         steps = data["steps"]
 
         # Step 1: cart.created
-        assert steps[0]["category"] == "cart"
-        assert steps[0]["title"] == "Shopping Session Initialized"
+        # Step 0: mandate.issued (from POST /api/cart)
+        assert steps[0]["category"] == "mandate"
+        assert "Spend Mandate Issued" in steps[0]["title"]
         assert steps[0]["status"] == "info"
 
-        # Step 2: cart.item_added
-        assert steps[1]["category"] == "cart"
-        assert "Item Added to Cart" in steps[1]["title"]
-        assert "Wireless Headphones" in steps[1]["summary"]
+        # Step 1: mandate.verified (valid)
+        assert steps[1]["category"] == "mandate"
+        assert "Mandate Verified" in steps[1]["title"]
+        assert steps[1]["status"] == "success"
 
-        # Step 3: cart.item_removed
-        assert steps[2]["category"] == "cart"
-        assert steps[2]["title"] == "Item Removed from Cart"
+        # Step 2: mandate.verified (invalid)
+        assert steps[2]["category"] == "mandate"
+        assert "Mandate Verification Failed" in steps[2]["title"]
+        assert steps[2]["status"] == "danger"
 
-        # Step 4: agent.proposed
-        assert steps[3]["category"] == "agent"
-        assert "LLM Agent Generated 2 Recommendation(s)" in steps[3]["title"]
+        # Step 3: cart.created
+        assert steps[3]["category"] == "cart"
+        assert steps[3]["title"] == "Shopping Session Initialized"
+        assert steps[3]["status"] == "info"
 
-        # Step 5: gate.decision - accepted
-        assert steps[4]["category"] == "gate"
-        assert steps[4]["title"] == "Policy Gate: Fully Approved"
-        assert steps[4]["status"] == "success"
+        # Step 4: cart.item_added
+        assert steps[4]["category"] == "cart"
+        assert "Item Added to Cart" in steps[4]["title"]
+        assert "Wireless Headphones" in steps[4]["summary"]
 
-        # Step 6: gate.decision - partial
-        assert steps[5]["category"] == "gate"
-        assert "Partial Acceptance" in steps[5]["title"]
-        assert steps[5]["status"] == "warning"
+        # Step 5: cart.item_removed
+        assert steps[5]["category"] == "cart"
+        assert steps[5]["title"] == "Item Removed from Cart"
 
-        # Step 7: gate.decision - rejected
-        assert steps[6]["category"] == "gate"
-        assert steps[6]["title"] == "Policy Gate: Rejected All Proposals"
-        assert steps[6]["status"] == "danger"
+        # Step 6: agent.proposed
+        assert steps[6]["category"] == "agent"
+        assert "LLM Agent Generated 2 Recommendation(s)" in steps[6]["title"]
 
-        # Step 8: trust_score.updated - positive delta
-        assert steps[7]["category"] == "trust"
+        # Step 7: gate.decision - accepted
+        assert steps[7]["category"] == "gate"
+        assert steps[7]["title"] == "Policy Gate: Fully Approved"
         assert steps[7]["status"] == "success"
-        assert "+2" in steps[7]["title"]
 
-        # Step 9: trust_score.updated - injection penalty
-        assert steps[8]["category"] == "trust"
-        assert steps[8]["status"] == "danger"
-        assert "-15" in steps[8]["title"]
+        # Step 8: gate.decision - partial
+        assert steps[8]["category"] == "gate"
+        assert "Partial Acceptance" in steps[8]["title"]
+        assert steps[8]["status"] == "warning"
 
-        # Step 10: trust_score.updated - standard negative delta
-        assert steps[9]["category"] == "trust"
-        assert steps[9]["status"] == "warning"
-        assert "-5" in steps[9]["title"]
+        # Step 9: gate.decision - rejected
+        assert steps[9]["category"] == "gate"
+        assert steps[9]["title"] == "Policy Gate: Rejected All Proposals"
+        assert steps[9]["status"] == "danger"
 
-        # Step 11: trust_score.updated - zero delta
+        # Step 10: trust_score.updated - positive delta
         assert steps[10]["category"] == "trust"
-        assert steps[10]["status"] == "info"
+        assert steps[10]["status"] == "success"
+        assert "+2" in steps[10]["title"]
 
-        # Step 12: user.reviewed
-        assert steps[11]["category"] == "user"
-        assert steps[11]["title"] == "User Confirmation & Review Completed"
+        # Step 11: trust_score.updated - injection penalty
+        assert steps[11]["category"] == "trust"
+        assert steps[11]["status"] == "danger"
+        assert "-15" in steps[11]["title"]
 
-        # Step 13: user.accepted
-        assert steps[12]["category"] == "user"
-        assert steps[12]["title"] == "User Accepted Upsell Proposal"
-        assert steps[12]["status"] == "success"
+        # Step 12: trust_score.updated - standard negative delta
+        assert steps[12]["category"] == "trust"
+        assert steps[12]["status"] == "warning"
+        assert "-5" in steps[12]["title"]
 
-        # Step 14: user.declined
-        assert steps[13]["category"] == "user"
-        assert steps[13]["title"] == "User Declined Recommendation"
+        # Step 13: trust_score.updated - zero delta
+        assert steps[13]["category"] == "trust"
+        assert steps[13]["status"] == "info"
 
-        # Step 15: checkout.created (live)
-        assert steps[14]["category"] == "checkout"
-        assert "Live Mode" in steps[14]["title"]
-        assert steps[14]["status"] == "success"
+        # Step 14: user.reviewed
+        assert steps[14]["category"] == "user"
+        assert steps[14]["title"] == "User Confirmation & Review Completed"
 
-        # Step 16: checkout.created (mock)
-        assert steps[15]["category"] == "checkout"
-        assert "Mock Mode" in steps[15]["title"]
+        # Step 15: user.accepted
+        assert steps[15]["category"] == "user"
+        assert steps[15]["title"] == "User Accepted Upsell Proposal"
         assert steps[15]["status"] == "success"
 
-        # Step 17: checkout.failed
-        assert steps[16]["category"] == "checkout"
-        assert "Checkout Failed (Cart Preserved)" in steps[16]["title"]
-        assert steps[16]["status"] == "danger"
+        # Step 16: user.declined
+        assert steps[16]["category"] == "user"
+        assert steps[16]["title"] == "User Declined Recommendation"
 
-        # Step 18: system fallback
-        assert steps[17]["category"] == "system"
-        assert steps[17]["title"] == "System Maintenance"
+        # Step 17: checkout.created (live)
+        assert steps[17]["category"] == "checkout"
+        assert "Live Mode" in steps[17]["title"]
+        assert steps[17]["status"] == "success"
+
+        # Step 18: checkout.created (mock)
+        assert steps[18]["category"] == "checkout"
+        assert "Mock Mode" in steps[18]["title"]
+        assert steps[18]["status"] == "success"
+
+        # Step 19: checkout.failed
+        assert steps[19]["category"] == "checkout"
+        assert "Checkout Failed (Cart Preserved)" in steps[19]["title"]
+        assert steps[19]["status"] == "danger"
+
+        # Step 20: system fallback
+        assert steps[20]["category"] == "system"
+        assert steps[20]["title"] == "System Maintenance"
 
         # Direct router handler invocation
         async with TestSessionLocal() as db:
             replay = await get_session_replay(session_id, db)
-            assert replay.total_steps == 18
-            assert replay.steps[0].category == "cart"
+            assert replay.total_steps == 21
+            assert replay.steps[0].category == "mandate"

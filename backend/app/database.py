@@ -53,6 +53,22 @@ async def create_tables() -> None:
         except Exception:  # noqa: S110
             pass
 
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE cart_sessions ADD COLUMN IF NOT EXISTS "
+                    "mandate_payload JSON"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE cart_sessions ADD COLUMN IF NOT EXISTS "
+                    "mandate_signature VARCHAR(128)"
+                )
+            )
+        except Exception:  # noqa: S110
+            pass
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields a DB session per request."""

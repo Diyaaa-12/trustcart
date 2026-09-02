@@ -61,6 +61,30 @@ def _build_cart_out(session: CartSession) -> CartOut:
         Decimal("0"),
         settings.MAX_DISCOUNT_BUDGET_PCT - session.discount_budget_used_pct,
     )
+    mandate_out = None
+    if session.mandate_payload and isinstance(session.mandate_payload, dict):
+        from datetime import UTC, datetime
+
+        from app.schemas.cart import MandateOut
+        from app.services.mandate import compute_mandate_fingerprint
+
+        exp_str = str(session.mandate_payload.get("expires_at", ""))
+        try:
+            exp_dt = datetime.fromisoformat(exp_str)
+            m_status = "active" if datetime.now(UTC) <= exp_dt else "expired"
+        except Exception:
+            m_status = "active"
+
+        mandate_out = MandateOut(
+            fingerprint=compute_mandate_fingerprint(session.mandate_payload),
+            max_cumulative_discount_pct=float(
+                session.mandate_payload.get("max_cumulative_discount_pct", 10.0)
+            ),
+            max_items_per_proposal=int(session.mandate_payload.get("max_items_per_proposal", 3)),
+            expires_at=exp_str,
+            status=m_status,
+        )
+
     return CartOut(
         session_id=session.id,
         items=items_out,
@@ -70,6 +94,7 @@ def _build_cart_out(session: CartSession) -> CartOut:
         item_count=sum(ci.quantity for ci in session.items),
         trust_score=session.trust_score,
         autonomy_tier=session.autonomy_tier.value,
+        mandate=mandate_out,
     )
 
 
@@ -97,8 +122,38 @@ async def _write_audit(
 @router.post("", response_model=CartOut, status_code=status.HTTP_201_CREATED)
 async def create_cart(db: AsyncSession = Depends(get_db)) -> CartOut:
     """Create a new cart session."""
-    session = CartSession()
+    session = CartSession(id=uuid.uuid4())
+
+    # Issue cryptographically signed spend mandate (AP2 protocol)
+    from app.services.mandate import (
+        compute_mandate_fingerprint,
+        create_mandate,
+        mandate_to_dict,
+    )
+
+    mandate_obj, signature = create_mandate(
+        session_id=session.id,
+        secret=settings.MANDATE_SECRET,
+        max_cumulative_discount_pct=settings.MAX_DISCOUNT_BUDGET_PCT,
+        max_items_per_proposal=settings.MAX_PROPOSALS_PER_CART,
+        ttl_minutes=settings.MANDATE_TTL_MINUTES,
+    )
+    session.mandate_payload = mandate_to_dict(mandate_obj)
+    session.mandate_signature = signature
+
     db.add(session)
+    await _write_audit(
+        db,
+        session.id,
+        "mandate.issued",
+        {
+            "mandate_fingerprint": compute_mandate_fingerprint(session.mandate_payload),
+            "max_cumulative_discount_pct": float(mandate_obj.max_cumulative_discount_pct),
+            "max_items": mandate_obj.max_items_per_proposal,
+            "expires_at": mandate_obj.expires_at,
+            "issued_at": mandate_obj.issued_at,
+        },
+    )
     await db.commit()
     await db.refresh(session)
     # Re-fetch with relationships

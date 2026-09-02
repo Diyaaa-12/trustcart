@@ -63,6 +63,32 @@ Modern LLMs are stochastic and fundamentally vulnerable to adversarial prompt in
 
 ---
 
+---
+
+## Signed Spend Mandate Layer (AP2 Protocol Inspiration)
+
+Trustcart implements a verifiable spend mandate layer inspired by Google's **Agent Payments Protocol (AP2)** mandate pattern. In real-world agentic commerce (as cited in the buildathon brief regarding AP2, ACP, and x402), an AI agent cannot spend customer funds or grant concessions based merely on ambient server configuration. Instead, it must operate within a verifiable, cryptographically signed **mandate** that defines the mathematical and temporal bounds of its authority.
+
+### How It Works in Trustcart:
+1. **Automatic Issuance at Cart Creation**: When a customer initializes a shopping session (`POST /api/cart`), the server automatically issues a `SpendMandate` containing:
+   - `session_id`: Unique identifier binding the mandate to that exact customer cart.
+   - `max_cumulative_discount_pct`: Hard ceiling on cumulative concessions (default 10.0%).
+   - `max_items_per_proposal`: Upper bound on recommendations per batch (default 3).
+   - `allowed_categories`: Whitelisted catalog categories permitted for upsell suggestions.
+   - `issued_at` & `expires_at`: Strict temporal authorization window (default 30 minutes).
+   - `nonce`: Random 32-character hexadecimal token preventing replay attacks.
+2. **Cryptographic Signing**: The mandate is serialized canonically and signed via HMAC-SHA256 with a server-held secret key (`MANDATE_SECRET`).
+3. **Mandatory Invariant Gate Check**: Before `policy_gate.py` evaluates any individual item rules, it executes `verify_mandate()`. If the mandate signature is forged, the fields are tampered with, or the temporal window has lapsed, the gate **immediately rejects all proposed items** with code `MANDATE_INVALID` or `MANDATE_EXPIRED`.
+4. **Structural Breach Penalty**: A mandate verification failure is treated as a structural protocol breach rather than a content disagreement. The trust score degrades sharply by **-20.0 points** (reason: `rejection_mandate_breach`), immediately downgrading the agent's autonomy tier.
+5. **Zero-Knowledge Audit Trail**: Audit events (`mandate.issued` and `mandate.verified`) record a truncated SHA-256 fingerprint (e.g. `mnd_a1b2c3d4e5f60718`) rather than raw secrets, proving verifiable governance in the audit replay view without exposing cryptographic keys.
+6. **Visual Governance in UI**: The customer frontend prominently displays the active mandate badge with live bounds and fingerprint verification.
+
+### Engineering Tradeoffs & AP2 Real-World Differences:
+- **HMAC-SHA256 vs. Asymmetric Signing (Ed25519/ECDSA)**: Real-world AP2 mandates use asymmetric public-key cryptography so independent multi-party participants (issuing wallet, merchant, AI agent, and payment rail) can verify mandates without sharing private keys. For this 3-day hackathon prototype, HMAC-SHA256 with a server-held secret provides identical deterministic tamper-evident guarantees, zero-I/O verification, and invariant enforcement without the overhead of public key infrastructure (PKI) management.
+- **Single-Issuer vs. Multi-Party Delegation**: In production AP2, mandates are co-signed by the consumer's wallet and delegated to an agent runtime. Trustcart models this flow faithfully on the merchant side, ensuring the agent runtime cannot exceed the customer-authorized bounds.
+
+---
+
 ## The Prompt-Injection Test: What It Does & What It Proves
 
 The repository includes end-to-end pipeline tests (`backend/tests/test_prompt_injection.py`) utilizing a fixture SKU (`is_demo_fixture=True`, Product ID 99) with an adversarial payload embedded in its name:
@@ -141,7 +167,7 @@ Services will be available at:
 
 ### 3. Run the Test Suite & Quality Checks
 ```bash
-# Run all 91 automated tests with coverage
+# Run all 112 automated tests with coverage
 cd backend
 pytest -v --tb=short --cov=app --cov-report=term-missing
 
@@ -164,12 +190,13 @@ Test Suite: pytest 9.0.3, pytest-asyncio 1.4.0, pytest-cov 7.1.0
 Tests:
   - tests/test_policy_gate.py:            33 passed
   - tests/test_trust_score.py:            36 passed
-  - tests/test_trust_adaptive_autonomy.py: 5 passed
+  - tests/test_mandate.py:                21 passed
   - tests/test_checkout.py:                7 passed
-  - tests/test_prompt_injection.py:        4 passed
   - tests/test_audit.py:                   6 passed
+  - tests/test_trust_adaptive_autonomy.py: 5 passed
+  - tests/test_prompt_injection.py:        4 passed
 ----------------------------------------------------------------------------------
-Total:                                    91 PASSED (100% success rate)
+Total:                                   112 PASSED (100% success rate)
 
 Statement Coverage Highlights:
   - app/services/policy_gate.py:          100%

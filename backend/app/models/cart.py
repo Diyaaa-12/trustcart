@@ -12,9 +12,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,9 @@ class CartSession(Base):
     trust_score: Mapped[Decimal] = mapped_column(
         Numeric(6, 2), nullable=False, default=Decimal("100")
     )
+    # Cryptographically signed spend mandate (AP2 protocol)
+    mandate_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    mandate_signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Relationships
     items: Mapped[list[CartItem]] = relationship(

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Application configuration via Pydantic Settings.
 All values come from environment variables / .env file.
 Secrets are NEVER hardcoded here.
@@ -16,34 +16,38 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Database ───────────────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     DATABASE_URL: str = (
         "postgresql+asyncpg://trustcart:trustcart@localhost:5432/trustcart"
     )
 
-    # ── Redis ──────────────────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # ── LLM ───────────────────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     LLM_PROVIDER: str = "gemini"          # "gemini" | "openai"
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
 
-    # ── Razorpay ──────────────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
 
-    # ── Policy Gate ────────────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     MAX_DISCOUNT_BUDGET_PCT: Decimal = Decimal("10.0")
     MAX_PROPOSALS_PER_CART: int = 3
     MAX_ITEM_DISCOUNT_PCT: Decimal = Decimal("20.0")
 
-    # ── App ────────────────────────────────────────────────────────────────────
+    # Spend Mandate (AP2 Protocol)
+    MANDATE_SECRET: str = "trustcart-ap2-mandate-secret-key-32b"  # noqa: S105
+    MANDATE_TTL_MINUTES: int = 30
+
+    # --- â”€â”€ ---
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
 
-    # ── Derived properties ─────────────────────────────────────────────────────
+    # --- â”€â”€ ---
     @property
     def razorpay_available(self) -> bool:
         """True only when both Razorpay keys are present."""

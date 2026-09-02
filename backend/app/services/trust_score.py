@@ -54,6 +54,9 @@ REJECT_DECAY: float = 5.0
 # Multiplier applied when the rejection reason matches an injection signature
 INJECTION_MULTIPLIER: float = 3.0
 
+# Multiplier applied when a cryptographic mandate breach occurs (structural trust breach)
+MANDATE_MULTIPLIER: float = 4.0
+
 # Points gained when ALL proposed items pass the gate cleanly
 ACCEPT_GAIN: float = 2.0
 
@@ -71,6 +74,13 @@ INJECTION_SIGNATURE_REASONS: frozenset[str] = frozenset({
     "category_not_allowed",     # Implausible category cross-sell
 })
 
+# Structural mandate failure reasons (AP2 protocol breach)
+MANDATE_BREACH_REASONS: frozenset[str] = frozenset({
+    "mandate_invalid",          # Tampered or forged HMAC signature
+    "mandate_expired",          # Temporal authorization window lapsed
+    "mandate_missing",          # Mandate absent when required
+})
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -80,6 +90,7 @@ class ChangeReason(StrEnum):
 
     REJECTION_CLEAN = "rejection_clean"
     REJECTION_INJECTION_SIGNAL = "rejection_injection_signal"
+    REJECTION_MANDATE_BREACH = "rejection_mandate_breach"
     ACCEPTANCE_CLEAN = "acceptance_clean"
     NO_CHANGE_NEUTRAL = "no_change_neutral"
 
@@ -229,8 +240,17 @@ def _apply_single_proposal(
             f"Score increased by {delta:.1f}."
         )
     elif gate_result in ("rejected", "partial"):
+        is_mandate = any(_extract_reason_str(r) in MANDATE_BREACH_REASONS for r in rejected_reasons)
         injection = _is_injection_signal(rejected_reasons)
-        if injection:
+        if is_mandate:
+            decay = REJECT_DECAY * MANDATE_MULTIPLIER
+            reason = ChangeReason.REJECTION_MANDATE_BREACH
+            matched = [r for r in rejected_reasons if r in MANDATE_BREACH_REASONS]
+            detail = (
+                f"Cryptographic spend mandate violation detected: {matched}. "
+                f"Score decreased by {decay:.1f} (structural protocol breach)."
+            )
+        elif injection:
             decay = REJECT_DECAY * INJECTION_MULTIPLIER
             reason = ChangeReason.REJECTION_INJECTION_SIGNAL
             matched = [r for r in rejected_reasons if r in INJECTION_SIGNATURE_REASONS]

@@ -1,5 +1,5 @@
 ﻿import { useState } from 'react';
-import { ShoppingCart, Plus, Trash2 } from 'lucide-react';
+import { ShoppingCart, Plus, Trash2, ShieldCheck } from 'lucide-react';
 import type { Cart, Product } from '../types';
 import { addToCart, removeFromCart } from '../api/client';
 

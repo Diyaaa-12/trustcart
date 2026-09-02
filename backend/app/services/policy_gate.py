@@ -55,6 +55,9 @@ class RejectionReason(StrEnum):
     PROPOSAL_COUNT_EXCEEDED = "proposal_count_exceeded"
     SESSION_BUDGET_EXCEEDED = "session_budget_exceeded"
     ALREADY_IN_CART = "already_in_cart"
+    MANDATE_INVALID = "mandate_invalid"
+    MANDATE_EXPIRED = "mandate_expired"
+    MANDATE_MISSING = "mandate_missing"
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,8 @@ class PolicyConfig:
     category_mappings: dict[str, list[str]] = field(
         default_factory=lambda: DEFAULT_CATEGORY_CROSS_SELL_MAP
     )
+    require_mandate: bool = False
+    mandate_secret: str = ""
 
 
 @dataclass
@@ -178,6 +183,10 @@ def run_gate(
     cart_items: list[dict[str, Any]],
     session_budget_used_pct: Decimal,
     config: PolicyConfig,
+    mandate: Any = None,
+    mandate_signature: str | None = None,
+    mandate_secret: str | None = None,
+    current_time: Any = None,
 ) -> GateResult:
     """
     Validate a list of LLM-proposed items against deterministic business rules.
@@ -203,6 +212,47 @@ def run_gate(
     cart_cats = _cart_categories(cart_items)
     cart_product_ids = {item["product_id"] for item in cart_items}
     running_budget = session_budget_used_pct
+
+    # ── Check 0: Cryptographic Spend Mandate (AP2 Protocol) ───────────────────
+    secret = mandate_secret or config.mandate_secret
+    if config.require_mandate or mandate is not None or mandate_signature is not None:
+        from app.services.mandate import verify_mandate
+
+        is_valid, v_reason = verify_mandate(
+            mandate=mandate,
+            signature=mandate_signature,
+            secret=secret,
+            now=current_time,
+        )
+        if not is_valid:
+            if v_reason == "mandate_expired":
+                m_reason = RejectionReason.MANDATE_EXPIRED
+                m_detail = "Spend mandate has expired. Agent is unauthorized to propose discounts."
+            elif v_reason == "mandate_missing":
+                m_reason = RejectionReason.MANDATE_MISSING
+                m_detail = (
+                    "Missing spend mandate. "
+                    "Agent requires a cryptographically signed authorization."
+                )
+            else:
+                m_reason = RejectionReason.MANDATE_INVALID
+                m_detail = "Cryptographic spend mandate signature verification failed or tampered."
+
+            rejected_all = [
+                RejectedItem(
+                    product_id=item.product_id,
+                    proposed_discount_pct=item.discount_pct,
+                    reason=m_reason,
+                    detail=m_detail,
+                )
+                for item in proposed_items
+            ]
+            return GateResult(
+                accepted_items=[],
+                rejected_items=rejected_all,
+                new_budget_used_pct=session_budget_used_pct,
+                passed=False,
+            )
 
     # â”€â”€ Check 1: Batch-level proposal count cap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â
     # Reject the excess items up front before individual checks.

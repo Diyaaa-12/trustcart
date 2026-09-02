@@ -50,6 +50,51 @@ def _build_replay_steps(events: list[AuditLog]) -> list[ReplayStepOut]:
                 status="info",
                 details=payload,
             ))
+        elif etype == "mandate.issued":
+            fp = payload.get("mandate_fingerprint", "mnd_unknown")
+            max_disc = float(payload.get("max_cumulative_discount_pct", 10.0))
+            max_items = int(payload.get("max_items", 3))
+            exp = payload.get("expires_at", "")
+            steps.append(ReplayStepOut(
+                step_number=step_num,
+                timestamp=ts,
+                category="mandate",
+                title=f"Spend Mandate Issued [{fp}]",
+                summary=(
+                    f"Cryptographic spend mandate issued under AP2 protocol: "
+                    f"max cumulative discount {max_disc:.0f}%, max {max_items} item(s). "
+                    f"Expires at {exp}."
+                ),
+                status="info",
+                details=payload,
+            ))
+        elif etype == "mandate.verified":
+            fp = payload.get("mandate_fingerprint", "mnd_unknown")
+            is_valid = payload.get("is_valid", False)
+            res = payload.get("verification_result", "unknown")
+            if is_valid:
+                mstatus = "success"
+                mtitle = f"Mandate Verified: Invariant Bounds Active [{fp}]"
+                msummary = (
+                    "HMAC-SHA256 signature verified against server key. "
+                    "Session bounds intact and active."
+                )
+            else:
+                mstatus = "danger"
+                mtitle = f"Mandate Verification Failed: {res.upper()} [{fp}]"
+                msummary = (
+                    f"Cryptographic verification rejected ({res}). "
+                    "Agent authorization revoked for proposal batch."
+                )
+            steps.append(ReplayStepOut(
+                step_number=step_num,
+                timestamp=ts,
+                category="mandate",
+                title=mtitle,
+                summary=msummary,
+                status=mstatus,
+                details=payload,
+            ))
         elif etype == "cart.item_added":
             pname = payload.get("product_name", f"Product #{payload.get('product_id', '')}")
             qty = payload.get("quantity", 1)

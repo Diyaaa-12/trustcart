@@ -9,6 +9,7 @@ import {
   CheckCircle,
   AlertTriangle,
   CreditCard,
+  Key,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
@@ -63,6 +64,8 @@ export function AuditReplayModal({ sessionId, isOpen, onClose }: Props) {
         return <Shield size={16} className="text-amber-400" />;
       case 'trust':
         return <CheckCircle size={16} className="text-emerald-400" />;
+      case 'mandate':
+        return <Key size={16} className="text-indigo-400" />;
       case 'checkout':
         return <CreditCard size={16} className="text-cyan-400" />;
       default:
