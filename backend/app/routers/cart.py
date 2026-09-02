@@ -167,7 +167,7 @@ async def add_item(
 
     await _write_audit(
         db, session_id, "cart.item_added",
-        {"product_id": body.product_id, "product_name": product.name, "quantity": body.quantity},
+        {"product_id": body.product_id, "product_name": product.name, "quantity": body.quantity, "unit_price": float(product.price)},
     )
     await db.commit()
 

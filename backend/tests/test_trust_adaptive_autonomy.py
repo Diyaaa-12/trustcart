@@ -11,7 +11,6 @@ Covers:
   - Action endpoint accepts "reviewed" / "confirmed"
   - GET /audit/{session_id} includes current_trust_score, current_autonomy_tier, trust_score_history
 """
-import uuid
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -19,30 +18,40 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from app.database import Base
 from app.models.cart import CartItem, CartSession
 from app.models.product import Product
 from app.services.policy_gate import ProposedItem
-from tests.test_checkout import TestSessionLocal, test_engine, client
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def setup_db():
-    """Create tables before each test, drop after."""
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+from tests.test_checkout import TestSessionLocal
 
 
 @pytest_asyncio.fixture
-async def seeded_cart_with_items(client):
+async def seeded_cart_with_items():
     """Seed catalog products and create a cart session with 1 electronics item."""
     async with TestSessionLocal() as db:
-        p1 = Product(id=1, name="Headphones", price=Decimal("5000"), category="Electronics", stock=10, is_active=True)
-        p2 = Product(id=2, name="Case", price=Decimal("500"), category="Accessories", stock=20, is_active=True)
-        p3 = Product(id=3, name="Shoes", price=Decimal("3000"), category="Footwear", stock=10, is_active=True)
+        p1 = Product(
+            id=1,
+            name="Headphones",
+            price=Decimal("5000"),
+            category="Electronics",
+            stock=10,
+            is_active=True,
+        )
+        p2 = Product(
+            id=2,
+            name="Case",
+            price=Decimal("500"),
+            category="Accessories",
+            stock=20,
+            is_active=True,
+        )
+        p3 = Product(
+            id=3,
+            name="Shoes",
+            price=Decimal("3000"),
+            category="Footwear",
+            stock=10,
+            is_active=True,
+        )
         db.add_all([p1, p2, p3])
 
         session = CartSession()
@@ -50,7 +59,12 @@ async def seeded_cart_with_items(client):
         await db.commit()
         await db.refresh(session)
 
-        item = CartItem(session_id=session.id, product_id=1, quantity=1, unit_price=Decimal("5000"))
+        item = CartItem(
+            session_id=session.id,
+            product_id=1,
+            quantity=1,
+            unit_price=Decimal("5000"),
+        )
         db.add(item)
         await db.commit()
         return session.id
@@ -72,7 +86,9 @@ class TestTrustAdaptiveAutonomy:
         session_id = seeded_cart_with_items
         mock_proposed = [ProposedItem(product_id=2, discount_pct=Decimal("5.0"))]
 
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        patch_target = "app.routers.proposals.get_proposals"
+        mock_getter = AsyncMock(return_value=(mock_proposed, {}))
+        with patch(patch_target, new=mock_getter):
             res = await client.post(f"/api/proposals/{session_id}")
             assert res.status_code == 201
             data = res.json()
@@ -107,7 +123,9 @@ class TestTrustAdaptiveAutonomy:
 
         # Propose a valid item
         mock_proposed = [ProposedItem(product_id=2, discount_pct=Decimal("5.0"))]
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        patch_target = "app.routers.proposals.get_proposals"
+        mock_getter = AsyncMock(return_value=(mock_proposed, {}))
+        with patch(patch_target, new=mock_getter):
             res = await client.post(f"/api/proposals/{session_id}")
             assert res.status_code == 201
             data = res.json()
@@ -158,7 +176,9 @@ class TestTrustAdaptiveAutonomy:
             ProposedItem(product_id=2, discount_pct=Decimal("5.0")),
             ProposedItem(product_id=2, discount_pct=Decimal("2.0")),
         ]
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        patch_target = "app.routers.proposals.get_proposals"
+        mock_getter = AsyncMock(return_value=(mock_proposed, {}))
+        with patch(patch_target, new=mock_getter):
             res = await client.post(f"/api/proposals/{session_id}")
             assert res.status_code == 201
             data = res.json()
@@ -168,13 +188,17 @@ class TestTrustAdaptiveAutonomy:
             assert data["requires_review"] is True
 
     @pytest.mark.asyncio
-    async def test_audit_timeline_includes_trust_score_history(self, client, seeded_cart_with_items):
+    async def test_audit_timeline_includes_trust_score_history(
+        self, client, seeded_cart_with_items
+    ):
         """GET /audit/{session_id} should return timeline with trust score history."""
         session_id = seeded_cart_with_items
 
-        # Generate a proposal to create audit logs
-        mock_proposed = [ProposedItem(product_id=999, discount_pct=Decimal("5.0"))]  # out of catalog
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        # Generate a proposal to create audit logs (out of catalog)
+        mock_proposed = [ProposedItem(product_id=999, discount_pct=Decimal("5.0"))]
+        patch_target = "app.routers.proposals.get_proposals"
+        mock_getter = AsyncMock(return_value=(mock_proposed, {}))
+        with patch(patch_target, new=mock_getter):
             await client.post(f"/api/proposals/{session_id}")
 
         audit_res = await client.get(f"/api/audit/{session_id}")

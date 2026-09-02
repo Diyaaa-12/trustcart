@@ -1,7 +1,9 @@
 ﻿"""Pydantic schemas for proposal and audit endpoints."""
+from __future__ import annotations
+
 import uuid
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -22,6 +24,18 @@ class RejectedItemOut(BaseModel):
     detail: str
 
 
+class CounterfactualComparison(BaseModel):
+    """
+    Side-by-side comparison of raw LLM proposals vs policy gate decisions.
+    Proves whether the gate modified or rejected what the LLM suggested.
+    """
+    llm_proposed_items: list[dict[str, Any]] = []
+    gate_accepted_items: list[AcceptedItemOut] = []
+    gate_rejected_items: list[RejectedItemOut] = []
+    divergence_detected: bool = False
+    summary: str = ""
+
+
 class ProposalOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -33,6 +47,7 @@ class ProposalOut(BaseModel):
     user_action: str          # "pending" | "review_required" | "reviewed" | "accepted" | "declined"
     autonomy_tier: str = "high"
     requires_review: bool = False
+    counterfactual: CounterfactualComparison | None = None
     created_at: datetime
 
 
@@ -61,6 +76,17 @@ class TrustScoreHistoryEntry(BaseModel):
     created_at: datetime
 
 
+class ReplayStepOut(BaseModel):
+    """A human-readable, sequential step in an audit replay timeline."""
+    step_number: int
+    timestamp: datetime
+    category: str      # "cart", "agent", "gate", "trust", "user", "checkout", "system"
+    title: str
+    summary: str
+    status: str        # "info", "success", "warning", "danger"
+    details: dict[str, Any] = {}
+
+
 class SessionTimelineOut(BaseModel):
     session_id: uuid.UUID
     events: list[AuditEventOut]
@@ -68,3 +94,12 @@ class SessionTimelineOut(BaseModel):
     current_trust_score: float = 100.0
     current_autonomy_tier: str = "high"
     trust_score_history: list[TrustScoreHistoryEntry] = []
+    replay_steps: list[ReplayStepOut] = []
+
+
+class AuditReplayOut(BaseModel):
+    session_id: uuid.UUID
+    total_steps: int
+    current_trust_score: float
+    current_autonomy_tier: str
+    steps: list[ReplayStepOut]

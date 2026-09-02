@@ -7,16 +7,23 @@ Key invariant enforced at the API layer (not trusted from client):
 - discount_budget_used_pct tracks cumulative discount spend for the session.
 - trust_score tracks the session autonomy level (0-100, default 100).
 """
-import uuid
-from decimal import Decimal
-from datetime import datetime
+from __future__ import annotations
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, func
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.services.trust_score import AutonomyTier, _autonomy_tier
+
+if TYPE_CHECKING:
+    from app.models.product import Product
+    from app.models.proposal import AuditLog, Proposal
 
 
 class CartSession(Base):
@@ -40,13 +47,13 @@ class CartSession(Base):
     )
 
     # Relationships
-    items: Mapped[list["CartItem"]] = relationship(
+    items: Mapped[list[CartItem]] = relationship(
         "CartItem", back_populates="session", cascade="all, delete-orphan"
     )
-    proposals: Mapped[list["Proposal"]] = relationship(  # noqa: F821
+    proposals: Mapped[list[Proposal]] = relationship(
         "Proposal", back_populates="session"
     )
-    audit_logs: Mapped[list["AuditLog"]] = relationship(  # noqa: F821
+    audit_logs: Mapped[list[AuditLog]] = relationship(
         "AuditLog", back_populates="session"
     )
 
@@ -77,8 +84,8 @@ class CartItem(Base):
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
     # Relationships
-    session: Mapped["CartSession"] = relationship("CartSession", back_populates="items")
-    product: Mapped["Product"] = relationship("Product", back_populates="cart_items")  # noqa: F821
+    session: Mapped[CartSession] = relationship("CartSession", back_populates="items")
+    product: Mapped[Product] = relationship("Product", back_populates="cart_items")
 
     def __repr__(self) -> str:
         return (

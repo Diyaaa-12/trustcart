@@ -85,3 +85,4 @@ def clothing_cart() -> list[dict]:
             "unit_price": 1799.0,
         }
     ]
+pytest_plugins = ["tests.test_checkout"]

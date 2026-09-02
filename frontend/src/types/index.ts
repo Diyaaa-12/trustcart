@@ -45,6 +45,20 @@ export interface RejectedItem {
   detail: string;
 }
 
+export interface LLMProposedItem {
+  product_id: number;
+  product_name: string;
+  discount_pct: number;
+}
+
+export interface CounterfactualComparison {
+  llm_proposed_items: LLMProposedItem[];
+  gate_accepted_items: AcceptedItem[];
+  gate_rejected_items: RejectedItem[];
+  divergence_detected: boolean;
+  summary: string;
+}
+
 export interface Proposal {
   id: string;
   session_id: string;
@@ -54,6 +68,7 @@ export interface Proposal {
   user_action: 'pending' | 'review_required' | 'reviewed' | 'accepted' | 'declined';
   autonomy_tier: 'high' | 'medium' | 'low';
   requires_review: boolean;
+  counterfactual?: CounterfactualComparison;
   created_at: string;
 }
 
@@ -64,4 +79,22 @@ export interface CheckoutResult {
   razorpay_key_id: string;
   session_id: string;
   mock_mode: boolean;
+}
+
+export interface ReplayStep {
+  step_number: number;
+  timestamp: string;
+  category: 'cart' | 'agent' | 'gate' | 'trust' | 'user' | 'checkout' | 'system';
+  title: string;
+  summary: string;
+  status: 'info' | 'success' | 'warning' | 'danger';
+  details: Record<string, unknown>;
+}
+
+export interface AuditReplay {
+  session_id: string;
+  total_steps: number;
+  current_trust_score: number;
+  current_autonomy_tier: string;
+  steps: ReplayStep[];
 }

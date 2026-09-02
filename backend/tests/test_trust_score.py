@@ -19,13 +19,15 @@ Coverage targets:
   - Autonomy tier properties (requires_confirmation, max_proposals_override)
 """
 from decimal import Decimal
+
 import pytest
 
+from app.services.policy_gate import RejectionReason
 from app.services.trust_score import (
+    ACCEPT_GAIN,
     DEFAULT_SCORE,
     INJECTION_MULTIPLIER,
     REJECT_DECAY,
-    ACCEPT_GAIN,
     TIER_HIGH_MIN,
     TIER_MEDIUM_MIN,
     AutonomyTier,
@@ -35,7 +37,6 @@ from app.services.trust_score import (
     compute_trust_score,
     get_autonomy_tier,
 )
-from app.services.policy_gate import RejectionReason
 
 
 # ===========================================================================
@@ -43,41 +44,44 @@ from app.services.policy_gate import RejectionReason
 # ===========================================================================
 class TestAutonomyTiers:
     def test_default_score_is_high_tier(self):
-        result = compute_trust_score(current_score=100.0)
-        assert result.new_score == 100.0
+        result = compute_trust_score(current_score=DEFAULT_SCORE)
+        assert isinstance(result, TrustScoreResult)
+        assert result.new_score == DEFAULT_SCORE
         assert result.autonomy_tier == AutonomyTier.HIGH
         assert result.requires_confirmation is False
         assert result.max_proposals_override is None
 
     def test_high_tier_exact_boundary(self):
-        assert get_autonomy_tier(70.0) == AutonomyTier.HIGH
-        assert get_autonomy_tier(70) == AutonomyTier.HIGH
-        assert get_autonomy_tier(Decimal("70.0")) == AutonomyTier.HIGH
+        assert get_autonomy_tier(TIER_HIGH_MIN) == AutonomyTier.HIGH
+        assert get_autonomy_tier(int(TIER_HIGH_MIN)) == AutonomyTier.HIGH
+        assert get_autonomy_tier(Decimal(str(TIER_HIGH_MIN))) == AutonomyTier.HIGH
 
-        res = compute_trust_score(current_score=70.0)
+        res = compute_trust_score(current_score=TIER_HIGH_MIN)
         assert res.autonomy_tier == AutonomyTier.HIGH
         assert res.requires_confirmation is False
         assert res.max_proposals_override is None
 
     def test_medium_tier_boundaries(self):
-        # 69.9 is Medium
-        assert get_autonomy_tier(69.9) == AutonomyTier.MEDIUM
-        res_69 = compute_trust_score(current_score=69.9)
+        # Just below high tier is Medium
+        just_below_high = TIER_HIGH_MIN - 0.1
+        assert get_autonomy_tier(just_below_high) == AutonomyTier.MEDIUM
+        res_69 = compute_trust_score(current_score=just_below_high)
         assert res_69.autonomy_tier == AutonomyTier.MEDIUM
         assert res_69.requires_confirmation is True
         assert res_69.max_proposals_override is None
 
-        # 40.0 is Medium
-        assert get_autonomy_tier(40.0) == AutonomyTier.MEDIUM
-        res_40 = compute_trust_score(current_score=40.0)
+        # Exact medium boundary
+        assert get_autonomy_tier(TIER_MEDIUM_MIN) == AutonomyTier.MEDIUM
+        res_40 = compute_trust_score(current_score=TIER_MEDIUM_MIN)
         assert res_40.autonomy_tier == AutonomyTier.MEDIUM
         assert res_40.requires_confirmation is True
         assert res_40.max_proposals_override is None
 
     def test_low_tier_boundaries(self):
-        # 39.9 is Low
-        assert get_autonomy_tier(39.9) == AutonomyTier.LOW
-        res_39 = compute_trust_score(current_score=39.9)
+        # Just below medium tier is Low
+        just_below_med = TIER_MEDIUM_MIN - 0.1
+        assert get_autonomy_tier(just_below_med) == AutonomyTier.LOW
+        res_39 = compute_trust_score(current_score=just_below_med)
         assert res_39.autonomy_tier == AutonomyTier.LOW
         assert res_39.requires_confirmation is True
         assert res_39.max_proposals_override == 1
@@ -96,19 +100,20 @@ class TestAutonomyTiers:
 class TestCleanAcceptance:
     def test_clean_accept_at_max_score_stays_100(self):
         rec = ProposalRecord(gate_result="accepted")
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.old_score == 100.0
-        assert res.new_score == 100.0
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.old_score == DEFAULT_SCORE
+        assert res.new_score == DEFAULT_SCORE
         assert res.delta == 0.0
         assert res.reason == ChangeReason.ACCEPTANCE_CLEAN
         assert res.autonomy_tier == AutonomyTier.HIGH
 
     def test_clean_accept_increases_by_gain(self):
         rec = ProposalRecord(gate_result="accepted")
-        res = compute_trust_score(rec, current_score=80.0)
-        assert res.old_score == 80.0
-        assert res.new_score == 82.0
-        assert res.delta == 2.0
+        start_score = 80.0
+        res = compute_trust_score(rec, current_score=start_score)
+        assert res.old_score == start_score
+        assert res.new_score == start_score + ACCEPT_GAIN
+        assert res.delta == ACCEPT_GAIN
         assert res.reason == ChangeReason.ACCEPTANCE_CLEAN
         assert res.autonomy_tier == AutonomyTier.HIGH
 
@@ -116,13 +121,13 @@ class TestCleanAcceptance:
         # From 69.0 (MEDIUM) + 2.0 -> 71.0 (HIGH)
         rec = ProposalRecord(gate_result="accepted")
         res = compute_trust_score(rec, current_score=69.0)
-        assert res.new_score == 71.0
+        assert res.new_score == 69.0 + ACCEPT_GAIN
         assert res.autonomy_tier == AutonomyTier.HIGH
         assert res.requires_confirmation is False
 
         # From 39.0 (LOW) + 2.0 -> 41.0 (MEDIUM)
         res_low = compute_trust_score(rec, current_score=39.0)
-        assert res_low.new_score == 41.0
+        assert res_low.new_score == 39.0 + ACCEPT_GAIN
         assert res_low.autonomy_tier == AutonomyTier.MEDIUM
         assert res_low.requires_confirmation is True
         assert res_low.max_proposals_override is None
@@ -140,12 +145,12 @@ class TestCleanRejections:
         "negative_discount",
         "proposal_count_exceeded",
     ])
-    def test_standard_rejection_decays_by_5(self, reason):
+    def test_standard_rejection_decays_by_reject_decay(self, reason):
         rec = ProposalRecord(gate_result="rejected", rejected_reasons=[reason])
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.old_score == 100.0
-        assert res.new_score == 95.0
-        assert res.delta == -5.0
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.old_score == DEFAULT_SCORE
+        assert res.new_score == DEFAULT_SCORE - REJECT_DECAY
+        assert res.delta == -REJECT_DECAY
         assert res.reason == ChangeReason.REJECTION_CLEAN
 
     def test_clean_rejection_using_enum(self):
@@ -153,8 +158,8 @@ class TestCleanRejections:
             gate_result="rejected",
             rejected_reasons=[RejectionReason.PRODUCT_OUT_OF_STOCK],
         )
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.new_score == 95.0
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - REJECT_DECAY
         assert res.reason == ChangeReason.REJECTION_CLEAN
 
     def test_partial_gate_result_with_clean_rejection(self):
@@ -163,8 +168,8 @@ class TestCleanRejections:
             rejected_reasons=["session_budget_exceeded"],
         )
         res = compute_trust_score(rec, current_score=90.0)
-        assert res.new_score == 85.0
-        assert res.delta == -5.0
+        assert res.new_score == 90.0 - REJECT_DECAY
+        assert res.delta == -REJECT_DECAY
         assert res.reason == ChangeReason.REJECTION_CLEAN
 
 
@@ -177,10 +182,11 @@ class TestInjectionPatternRejections:
             gate_result="rejected",
             rejected_reasons=["product_not_in_catalog"],
         )
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.old_score == 100.0
-        assert res.new_score == 85.0
-        assert res.delta == -15.0
+        expected_decay = REJECT_DECAY * INJECTION_MULTIPLIER
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.old_score == DEFAULT_SCORE
+        assert res.new_score == DEFAULT_SCORE - expected_decay
+        assert res.delta == -expected_decay
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
         assert "injection-signature" in res.detail
 
@@ -189,9 +195,10 @@ class TestInjectionPatternRejections:
             gate_result="rejected",
             rejected_reasons=[RejectionReason.ITEM_DISCOUNT_EXCEEDED],
         )
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.new_score == 85.0
-        assert res.delta == -15.0
+        expected_decay = REJECT_DECAY * INJECTION_MULTIPLIER
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - expected_decay
+        assert res.delta == -expected_decay
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
 
     def test_category_not_allowed_triggers_amplified_decay(self):
@@ -199,9 +206,10 @@ class TestInjectionPatternRejections:
             gate_result="rejected",
             rejected_reasons=["category_not_allowed"],
         )
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.new_score == 85.0
-        assert res.delta == -15.0
+        expected_decay = REJECT_DECAY * INJECTION_MULTIPLIER
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - expected_decay
+        assert res.delta == -expected_decay
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
 
     def test_multiple_reasons_with_one_injection_signal(self):
@@ -209,9 +217,10 @@ class TestInjectionPatternRejections:
             gate_result="rejected",
             rejected_reasons=["product_out_of_stock", "item_discount_exceeded"],
         )
-        res = compute_trust_score(rec, current_score=100.0)
-        assert res.new_score == 85.0
-        assert res.delta == -15.0
+        expected_decay = REJECT_DECAY * INJECTION_MULTIPLIER
+        res = compute_trust_score(rec, current_score=DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - expected_decay
+        assert res.delta == -expected_decay
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
 
     def test_partial_gate_result_with_injection_signal(self):
@@ -220,9 +229,10 @@ class TestInjectionPatternRejections:
             gate_result="partial",
             rejected_reasons=["product_not_in_catalog"],
         )
+        expected_decay = REJECT_DECAY * INJECTION_MULTIPLIER
         res = compute_trust_score(rec, current_score=90.0)
-        assert res.new_score == 75.0
-        assert res.delta == -15.0
+        assert res.new_score == 90.0 - expected_decay
+        assert res.delta == -expected_decay
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
 
 
@@ -261,7 +271,7 @@ class TestClamping:
 
         res_neg = compute_trust_score(rec, current_score=-20.0)
         assert res_neg.old_score == 0.0
-        assert res_neg.new_score == 2.0
+        assert res_neg.new_score == ACCEPT_GAIN
 
 
 # ===========================================================================
@@ -270,31 +280,26 @@ class TestClamping:
 class TestProposalHistorySequence:
     def test_sequential_history_list(self):
         history = [
-            ProposalRecord(gate_result="accepted"),                                  # 100 -> 100
-            ProposalRecord(gate_result="rejected", rejected_reasons=["out_of_stock"]),  # 100 -> 95
-            ProposalRecord(gate_result="rejected", rejected_reasons=["category_not_allowed"]),  # 95 -> 80
-            ProposalRecord(gate_result="accepted"),                                  # 80 -> 82
+            ProposalRecord(gate_result="accepted"),
+            ProposalRecord(gate_result="rejected", rejected_reasons=["out_of_stock"]),
+            ProposalRecord(gate_result="rejected", rejected_reasons=["category_not_allowed"]),
+            ProposalRecord(gate_result="accepted"),
         ]
-        res = compute_trust_score(proposal_history=history, current_score=100.0)
-        assert res.old_score == 100.0
+        res = compute_trust_score(proposal_history=history, current_score=DEFAULT_SCORE)
+        assert res.old_score == DEFAULT_SCORE
         assert res.new_score == 82.0
         assert res.delta == -18.0
         assert res.autonomy_tier == AutonomyTier.HIGH
 
     def test_history_drops_into_medium_then_low(self):
         history = [
-            # 100 -> 85 (HIGH)
             ProposalRecord(gate_result="rejected", rejected_reasons=["product_not_in_catalog"]),
-            # 85 -> 70 (HIGH)
             ProposalRecord(gate_result="rejected", rejected_reasons=["item_discount_exceeded"]),
-            # 70 -> 55 (MEDIUM)
             ProposalRecord(gate_result="rejected", rejected_reasons=["item_discount_exceeded"]),
-            # 55 -> 40 (MEDIUM)
             ProposalRecord(gate_result="rejected", rejected_reasons=["category_not_allowed"]),
-            # 40 -> 25 (LOW)
             ProposalRecord(gate_result="rejected", rejected_reasons=["item_discount_exceeded"]),
         ]
-        res = compute_trust_score(history, current_score=100.0)
+        res = compute_trust_score(history, current_score=DEFAULT_SCORE)
         assert res.new_score == 25.0
         assert res.autonomy_tier == AutonomyTier.LOW
         assert res.max_proposals_override == 1
@@ -321,8 +326,8 @@ class TestFlexibleInputs:
             "gate_result": "rejected",
             "rejected_reasons": ["item_discount_exceeded"],
         }
-        res = compute_trust_score(rec_dict, 100.0)
-        assert res.new_score == 85.0
+        res = compute_trust_score(rec_dict, DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - (REJECT_DECAY * INJECTION_MULTIPLIER)
         assert res.reason == ChangeReason.REJECTION_INJECTION_SIGNAL
 
     def test_dict_with_rejected_items_structure(self):
@@ -330,21 +335,22 @@ class TestFlexibleInputs:
             "gate_result": "rejected",
             "rejected_items": [{"product_id": 99, "reason": "product_not_in_catalog"}],
         }
-        res = compute_trust_score(rec_dict, 100.0)
-        assert res.new_score == 85.0
+        res = compute_trust_score(rec_dict, DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - (REJECT_DECAY * INJECTION_MULTIPLIER)
 
     def test_score_first_positional_signature(self):
         rec = ProposalRecord(gate_result="accepted")
         res = compute_trust_score(80.0, rec)
-        assert res.new_score == 82.0
+        assert res.new_score == 80.0 + ACCEPT_GAIN
 
     def test_type_conversions(self):
         rec = ProposalRecord(gate_result="accepted")
         res = compute_trust_score(rec, 90.0)
-        assert float(res) == 92.0
-        assert int(res) == 92
-        assert res.score == 92.0
-        assert res.updated_score == 92.0
+        expected = 90.0 + ACCEPT_GAIN
+        assert float(res) == expected
+        assert int(res) == int(expected)
+        assert res.score == expected
+        assert res.updated_score == expected
 
     def test_unknown_gate_result_is_neutral(self):
         rec = ProposalRecord(gate_result="unknown_status")
@@ -358,23 +364,24 @@ class TestFlexibleInputs:
             gate_result = "rejected"
             rejected_reasons = ["product_not_in_catalog"]
 
-        res = compute_trust_score(DummyObj(), 100.0)
-        assert res.new_score == 85.0
+        res = compute_trust_score(DummyObj(), DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - (REJECT_DECAY * INJECTION_MULTIPLIER)
 
     def test_custom_object_with_rejection_reasons(self):
         class DummyObj2:
             gate_result = "rejected"
             rejection_reasons = ["category_not_allowed"]
 
-        res = compute_trust_score(DummyObj2(), 100.0)
-        assert res.new_score == 85.0
+        res = compute_trust_score(DummyObj2(), DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - (REJECT_DECAY * INJECTION_MULTIPLIER)
 
     def test_extract_reason_str_from_nested_object(self):
         class ReasonObj:
             value = "item_discount_exceeded"
+
         class ItemObj:
             reason = ReasonObj()
 
         rec = ProposalRecord(gate_result="rejected", rejected_reasons=[ItemObj()])
-        res = compute_trust_score(rec, 100.0)
-        assert res.new_score == 85.0
+        res = compute_trust_score(rec, DEFAULT_SCORE)
+        assert res.new_score == DEFAULT_SCORE - (REJECT_DECAY * INJECTION_MULTIPLIER)

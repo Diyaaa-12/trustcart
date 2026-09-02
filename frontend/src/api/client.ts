@@ -1,6 +1,6 @@
 ﻿/** Typed API client -- all requests go through /api (proxied by Vite). */
 import axios from 'axios';
-import type { Cart, CheckoutResult, Product, Proposal } from '../types';
+import type { AuditReplay, Cart, CheckoutResult, Product, Proposal } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -37,3 +37,7 @@ export const recordAction = (
 // Checkout
 export const createCheckout = (sessionId: string): Promise<CheckoutResult> =>
   api.post<CheckoutResult>(`/checkout/${sessionId}`).then(r => r.data);
+
+// Audit & Replay
+export const getAuditReplay = (sessionId: string): Promise<AuditReplay> =>
+  api.get<AuditReplay>(`/audit/${sessionId}/replay`).then(r => r.data);

@@ -1,25 +1,18 @@
 ﻿"""
-Proposals router -- agent call + gate + persistence + trust scoring.
+Proposals router: agent generation, policy gate execution, user action.
 
-Flow:
-  POST /api/proposals/{session_id}
-    1. Load cart from DB (server-side -- client cannot inject cart state)
-    2. Check session autonomy tier -- if LOW, throttle max proposals to 1
-    3. Load full catalog from DB
-    4. Call agent -> LLM proposes items (may include bad items due to injection)
-    5. Run policy gate -> pure deterministic validation
-    6. Update session trust score & autonomy tier based on gate result
-    7. Write trust_score.updated audit event if score changed
-    8. Determine if proposal requires review based on autonomy tier
-    9. Persist Proposal row with full audit data
-    10. Write gate audit events
-    11. Return accepted items + rejected summary + autonomy state to client
-
-  POST /api/proposals/{session_id}/{proposal_id}/action
-    Record user action:
-    - If proposal in "review_required": user must confirm ("reviewed") before actionable
-    - If proposal in "pending" or "reviewed": user can accept or decline
+Key invariants:
+  - Agent (LLM) is called to generate recommendations; raw output is preserved.
+  - Policy gate is ALWAYS executed before proposals are shown to user.
+  - Trust score is evaluated and updated based on gate decision.
+  - Hard policy caps NEVER change based on tier.
+    Tier only adjusts UX friction and proposal volume.
+  - In LOW tier (<40), proposal volume is throttled to 1 item per request.
+  - In MEDIUM / LOW tier, proposals require explicit confirmation ("reviewed").
+  - All decisions, counterfactuals, and score changes are logged to AuditLog.
 """
+from __future__ import annotations
+
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -35,9 +28,19 @@ from app.database import get_db
 from app.models.cart import CartItem, CartSession
 from app.models.product import Product
 from app.models.proposal import AuditLog, Proposal
-from app.schemas.proposal import AcceptedItemOut, ProposalOut, RejectedItemOut, UserActionRequest
+from app.schemas.proposal import (
+    AcceptedItemOut,
+    CounterfactualComparison,
+    ProposalOut,
+    RejectedItemOut,
+    UserActionRequest,
+)
 from app.services.agent import get_proposals
-from app.services.policy_gate import CatalogProduct, PolicyConfig, ProposedItem, run_gate
+from app.services.policy_gate import (
+    CatalogProduct,
+    PolicyConfig,
+    run_gate,
+)
 from app.services.trust_score import (
     AutonomyTier,
     ProposalRecord,
@@ -53,13 +56,14 @@ router = APIRouter(prefix="/proposals", tags=["proposals"])
 # ---------------------------------------------------------------------------
 async def _get_session_or_404(session_id: uuid.UUID, db: AsyncSession) -> CartSession:
     result = await db.execute(
-        select(CartSession)
-        .options(selectinload(CartSession.items).selectinload(CartItem.product))
-        .where(CartSession.id == session_id)
+        select(CartSession).options(selectinload(CartSession.items).selectinload(CartItem.product)).where(CartSession.id == session_id)
     )
     session = result.scalar_one_or_none()
     if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cart session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart session not found",
+        )
     return session
 
 
@@ -118,35 +122,24 @@ async def generate_proposals(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ) -> ProposalOut:
-    """Run the agent -> gate pipeline and return safe proposals."""
+    """Generate upsell/cross-sell proposals for a cart session."""
     session = await _get_session_or_404(session_id, db)
-
-    if not session.items:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Cannot generate proposals for an empty cart",
-        )
-
-    # Autonomy tier check before generation:
-    # Low tier (<40) throttles proposal count per request to 1
-    current_tier = session.autonomy_tier
-    max_proposals = 1 if current_tier == AutonomyTier.LOW else settings.MAX_PROPOSALS_PER_CART
-
-    # 1. Build cart context
-    cart_items_data = _cart_items_to_dicts(session)
     snapshot = _cart_snapshot(session)
+    cart_items_data = _cart_items_to_dicts(session)
 
-    # 2. Load full catalog for agent and gate
+    current_tier = session.autonomy_tier
+    max_proposals = (
+        1 if current_tier == AutonomyTier.LOW else settings.MAX_PROPOSALS_PER_CART
+    )
+
     catalog_result = await db.execute(
-        select(Product).where(Product.is_active == True)  # noqa: E712
+        select(Product).where(Product.is_active.is_(True))
     )
     all_products = catalog_result.scalars().all()
-
     catalog_dicts = [
         {
             "id": p.id,
             "name": p.name,
-            "description": p.description,
             "price": float(p.price),
             "category": p.category,
             "stock": p.stock,
@@ -154,7 +147,7 @@ async def generate_proposals(
         }
         for p in all_products
     ]
-    catalog_for_gate: dict[int, CatalogProduct] = {
+    catalog_for_gate = {
         p.id: CatalogProduct(
             id=p.id,
             name=p.name,
@@ -166,8 +159,10 @@ async def generate_proposals(
         for p in all_products
     }
 
-    # 3. Call agent (LLM)
-    logger.info("Calling agent", extra={"session_id": str(session_id), "tier": current_tier.value})
+    logger.info(
+        "Calling agent",
+        extra={"session_id": str(session_id), "tier": current_tier.value},
+    )
     proposed_items, llm_raw = await get_proposals(cart_items_data, catalog_dicts)
     logger.info(
         "Agent returned proposals",
@@ -180,9 +175,6 @@ async def generate_proposals(
         "autonomy_tier": current_tier.value,
     })
 
-    # 4. Run policy gate (pure, deterministic -- no I/O)
-    # Hard policy caps (discount %, item count, category rules) NEVER change based on tier.
-    # Tier only throttles proposal volume in LOW tier.
     config = PolicyConfig(
         max_discount_budget_pct=settings.MAX_DISCOUNT_BUDGET_PCT,
         max_proposals_per_cart=max_proposals,
@@ -196,7 +188,9 @@ async def generate_proposals(
         config=config,
     )
 
-    gate_label = _gate_result_label(len(gate_result.accepted_items), len(gate_result.rejected_items))
+    gate_label = _gate_result_label(
+        len(gate_result.accepted_items), len(gate_result.rejected_items)
+    )
     logger.info(
         "Gate decision",
         extra={
@@ -207,46 +201,35 @@ async def generate_proposals(
         },
     )
 
-    # 5. Update Trust Score
-    rejection_reasons = [r.reason.value for r in gate_result.rejected_items]
-    proposal_record = ProposalRecord(
+    record = ProposalRecord(
         gate_result=gate_label,
-        rejected_reasons=rejection_reasons,
+        rejected_reasons=[r.reason for r in gate_result.rejected_items],
     )
-    old_trust = float(session.trust_score)
-    trust_res = compute_trust_score(
-        proposal_history=proposal_record,
-        current_score=old_trust,
+    score_result = compute_trust_score(
+        record,
+        current_score=float(session.trust_score),
     )
-    session.trust_score = Decimal(str(round(trust_res.new_score, 2)))
 
-    # Every trust score change is written to AuditLog with old, new, and reason
-    if trust_res.delta != 0.0 or old_trust != trust_res.new_score:
-        await _write_audit(db, session_id, "trust_score.updated", {
-            "old_score": trust_res.old_score,
-            "new_score": trust_res.new_score,
-            "delta": trust_res.delta,
-            "reason": trust_res.reason.value,
-            "detail": trust_res.detail,
-            "autonomy_tier": trust_res.autonomy_tier.value,
-        })
+    session.trust_score = Decimal(f"{score_result.new_score:.2f}")
+    await _write_audit(db, session_id, "trust_score.updated", {
+        "old_score": score_result.old_score,
+        "new_score": score_result.new_score,
+        "delta": score_result.delta,
+        "reason": score_result.reason.value,
+        "detail": score_result.detail,
+        "autonomy_tier": score_result.autonomy_tier.value,
+    })
 
-    # Read autonomy tier BEFORE showing any proposal to the user:
-    # - high tier (score >= 70): agent proposes normally
-    # - medium tier (40-69): proposals require explicit confirmation ("review_required")
-    # - low tier (<40): all proposals require confirmation
-    effective_tier = trust_res.autonomy_tier
+    effective_tier = score_result.autonomy_tier
     requires_review = effective_tier in (AutonomyTier.MEDIUM, AutonomyTier.LOW)
     initial_action = "review_required" if requires_review else "pending"
 
-    # 6. Build persistence payloads
     accepted_for_db = [
         {"product_id": i.product_id, "discount_pct": str(i.discount_pct)}
         for i in gate_result.accepted_items
     ]
     rejected_for_db = [r.to_dict() for r in gate_result.rejected_items]
 
-    # 7. Persist proposal
     proposal = Proposal(
         session_id=session_id,
         cart_snapshot=snapshot,
@@ -262,7 +245,6 @@ async def generate_proposals(
     )
     db.add(proposal)
 
-    # 8. Write gate audit events
     await _write_audit(db, session_id, "gate.decision", {
         "proposal_id": str(proposal.id),
         "gate_result": gate_label,
@@ -271,24 +253,30 @@ async def generate_proposals(
         "rejection_reasons": [r.to_dict() for r in gate_result.rejected_items],
         "autonomy_tier": effective_tier.value,
         "requires_review": requires_review,
+        "counterfactual": {
+            "proposed_count": len(proposed_items),
+            "accepted_count": len(gate_result.accepted_items),
+            "rejected_count": len(gate_result.rejected_items),
+            "divergence_detected": len(gate_result.rejected_items) > 0,
+        },
     })
 
     await db.commit()
     await db.refresh(proposal)
 
-    # 9. Build response (enrich accepted items with product names/prices)
     product_map = {p.id: p for p in all_products}
     accepted_out = []
     for acc in gate_result.accepted_items:
-        p = product_map[acc.product_id]
-        disc = acc.discount_pct / Decimal("100")
-        accepted_out.append(AcceptedItemOut(
-            product_id=acc.product_id,
-            product_name=p.name,
-            original_price=p.price,
-            discount_pct=acc.discount_pct,
-            discounted_price=p.price * (1 - disc),
-        ))
+        p = product_map.get(acc.product_id)
+        if p:
+            disc = acc.discount_pct / Decimal("100")
+            accepted_out.append(AcceptedItemOut(
+                product_id=acc.product_id,
+                product_name=p.name,
+                original_price=p.price,
+                discount_pct=acc.discount_pct,
+                discounted_price=p.price * (1 - disc),
+            ))
 
     rejected_out = [
         RejectedItemOut(
@@ -300,6 +288,31 @@ async def generate_proposals(
         for r in gate_result.rejected_items
     ]
 
+    llm_items_out = []
+    for i in proposed_items:
+        p_obj = product_map.get(i.product_id)
+        p_name = p_obj.name if p_obj else f"Item #{i.product_id}"
+        llm_items_out.append({
+            "product_id": i.product_id,
+            "product_name": p_name,
+            "discount_pct": float(i.discount_pct),
+        })
+
+    summary_msg = (
+        f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
+        f"{len(rejected_out)} rejected."
+        if len(rejected_out) > 0
+        else f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
+    )
+
+    counterfactual = CounterfactualComparison(
+        llm_proposed_items=llm_items_out,
+        gate_accepted_items=accepted_out,
+        gate_rejected_items=rejected_out,
+        divergence_detected=len(rejected_out) > 0,
+        summary=summary_msg,
+    )
+
     return ProposalOut(
         id=proposal.id,
         session_id=session_id,
@@ -309,6 +322,7 @@ async def generate_proposals(
         user_action=proposal.user_action,
         autonomy_tier=effective_tier.value,
         requires_review=requires_review,
+        counterfactual=counterfactual,
         created_at=proposal.created_at,
     )
 
@@ -338,22 +352,23 @@ async def record_user_action(
     )
     proposal = result.scalar_one_or_none()
     if proposal is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proposal not found",
+        )
 
     session_result = await db.execute(
-        select(CartSession).where(CartSession.id == session_id)
+        select(CartSession).options(selectinload(CartSession.items).selectinload(CartItem.product)).where(CartSession.id == session_id)
     )
     session = session_result.scalar_one_or_none()
     current_tier = session.autonomy_tier if session else AutonomyTier.HIGH
 
-    # Check if already completed
     if proposal.user_action in ("accepted", "declined"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Proposal already actioned: {proposal.user_action}",
         )
 
-    # If proposal requires review step before being actionable
     if proposal.user_action == "review_required":
         if body.action in ("reviewed", "confirm", "confirmed", "review"):
             proposal.user_action = "reviewed"
@@ -377,7 +392,6 @@ async def record_user_action(
             proposal.user_action = body.action
             proposal.acted_at = datetime.now(timezone.utc)
 
-            # If user accepted, update session discount budget
             if body.action == "accepted" and proposal.accepted_items and session:
                 total_disc = sum(
                     Decimal(item["discount_pct"]) for item in proposal.accepted_items
@@ -391,12 +405,10 @@ async def record_user_action(
             await db.commit()
             await db.refresh(proposal)
         elif body.action in ("reviewed", "confirm", "confirmed", "review"):
-            # Already reviewed or pending -- keep as reviewed
             proposal.user_action = "reviewed"
             await db.commit()
             await db.refresh(proposal)
 
-    # Re-build response
     catalog_result = await db.execute(select(Product))
     product_map = {p.id: p for p in catalog_result.scalars().all()}
 
@@ -423,6 +435,32 @@ async def record_user_action(
         for r in proposal.rejected_items
     ]
 
+    llm_items_out = []
+    for i in proposal.proposed_items:
+        pid = int(i["product_id"])
+        p_obj = product_map.get(pid)
+        p_name = p_obj.name if p_obj else f"Item #{pid}"
+        llm_items_out.append({
+            "product_id": pid,
+            "product_name": p_name,
+            "discount_pct": float(Decimal(str(i["discount_pct"]))),
+        })
+
+    summary_msg = (
+        f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
+        f"{len(rejected_out)} rejected."
+        if len(rejected_out) > 0
+        else f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
+    )
+
+    counterfactual = CounterfactualComparison(
+        llm_proposed_items=llm_items_out,
+        gate_accepted_items=accepted_out,
+        gate_rejected_items=rejected_out,
+        divergence_detected=len(rejected_out) > 0,
+        summary=summary_msg,
+    )
+
     return ProposalOut(
         id=proposal.id,
         session_id=session_id,
@@ -431,6 +469,7 @@ async def record_user_action(
         rejected_items=rejected_out,
         user_action=proposal.user_action,
         autonomy_tier=current_tier.value,
-        requires_review=(proposal.user_action == "review_required"),
+        requires_review=proposal.user_action == "review_required",
+        counterfactual=counterfactual,
         created_at=proposal.created_at,
     )

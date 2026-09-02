@@ -1,66 +1,72 @@
 ﻿import { useState } from 'react';
-import { Sparkles, Shield, ShieldX, ChevronDown, ChevronUp, Check, X, AlertTriangle } from 'lucide-react';
+import {
+  Sparkles,
+  Check,
+  X,
+  ChevronDown,
+  ChevronUp,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldX,
+  AlertTriangle,
+  Split,
+} from 'lucide-react';
 import type { Cart, Proposal } from '../types';
-import { fetchCart, generateProposals, recordAction } from '../api/client';
+import { generateProposals, recordAction, fetchCart } from '../api/client';
 
 interface Props {
-  cart: Cart | null;
   sessionId: string;
   onCartUpdate: (cart: Cart) => void;
+  onRefreshCart?: () => void;
 }
 
-const formatINR = (n: number) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
-
-export default function ProposalPanel({ cart, sessionId, onCartUpdate }: Props) {
+export function ProposalPanel({ sessionId, onCartUpdate, onRefreshCart }: Props) {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showRejected, setShowRejected] = useState<Record<string, boolean>>({});
-
-  const canPropose = (cart?.item_count ?? 0) > 0;
-  const currentTier = cart?.autonomy_tier ?? 'high';
+  const [showCounterfactual, setShowCounterfactual] = useState<Record<string, boolean>>({});
 
   const handleGenerate = async () => {
     setLoading(true);
     setError(null);
     try {
-      const proposal = await generateProposals(sessionId);
-      setProposals(prev => [proposal, ...prev]);
-
-      // Refresh cart to update live trust score and budget
-      try {
-        const updatedCart = await fetchCart(sessionId);
-        onCartUpdate(updatedCart);
-      } catch (err) {
-        console.error('Failed to refresh cart after proposals:', err);
+      const p = await generateProposals(sessionId);
+      setProposals(prev => [p, ...prev]);
+      if (onRefreshCart) {
+        onRefreshCart();
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(typeof msg === 'string' ? msg : 'Failed to get suggestions. Please try again.');
+      setError(err instanceof Error ? err.message : 'Failed to generate recommendations');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAction = async (proposal: Proposal, action: 'accepted' | 'declined' | 'reviewed') => {
+  const handleAction = async (
+    proposal: Proposal,
+    action: 'accepted' | 'declined' | 'reviewed'
+  ) => {
     setActing(proposal.id);
+    setError(null);
     try {
       const updated = await recordAction(sessionId, proposal.id, action);
-      setProposals(prev => prev.map(p => p.id === proposal.id ? updated : p));
+      setProposals(prev =>
+        prev.map(p => (p.id === proposal.id ? { ...p, ...updated } : p))
+      );
 
-      // Refresh cart if accepted
       if (action === 'accepted') {
-        try {
-          const updatedCart = await fetchCart(sessionId);
-          onCartUpdate(updatedCart);
-        } catch (err) {
-          console.error('Failed to refresh cart after action:', err);
+        // fetchCart statically imported
+        const updatedCart = await fetchCart(sessionId);
+        onCartUpdate(updatedCart);
+      } else if (action === 'reviewed') {
+        if (onRefreshCart) {
+          onRefreshCart();
         }
       }
-    } catch (err) {
-      console.error('Failed to record action:', err);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : `Failed to record ${action}`);
     } finally {
       setActing(null);
     }
@@ -69,79 +75,67 @@ export default function ProposalPanel({ cart, sessionId, onCartUpdate }: Props) 
   const toggleRejected = (id: string) =>
     setShowRejected(prev => ({ ...prev, [id]: !prev[id] }));
 
+  const toggleCounterfactual = (id: string) =>
+    setShowCounterfactual(prev => ({ ...prev, [id]: !prev[id] }));
+
+  const formatINR = (val: number) =>
+    `₹${Number(val).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
   const gateLabel = (result: Proposal['gate_result']) => {
-    if (result === 'accepted') return { text: 'All Passed', cls: 'badge-success' };
-    if (result === 'rejected') return { text: 'All Blocked', cls: 'badge-danger' };
-    return { text: 'Partial', cls: 'badge-warning' };
+    switch (result) {
+      case 'accepted':
+        return { text: 'All Passed', cls: 'badge-success', icon: ShieldCheck };
+      case 'partial':
+        return { text: 'Partially Passed', cls: 'badge-warning', icon: ShieldAlert };
+      case 'rejected':
+        return { text: 'Blocked', cls: 'badge-danger', icon: ShieldX };
+    }
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '1rem' }}>
-
-      {/* Header */}
-      <div className="card" style={{ padding: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '1.25rem' }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'rgba(99,102,241,0.15)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
-          }}>
-            <Sparkles size={18} color="var(--accent-light)" />
-          </div>
-          <div>
-            <div className="text-base font-semi">AI Suggestions</div>
-            <div className="text-xs text-muted" style={{ marginTop: 2 }}>
-              Tier: <strong style={{ textTransform: 'uppercase', color: currentTier === 'high' ? 'var(--success)' : currentTier === 'medium' ? 'var(--warning)' : 'var(--danger)' }}>{currentTier}</strong> • Every proposal verified by policy gate
-            </div>
-          </div>
-        </div>
-
-        {/* Policy gate & Trust explanation */}
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: '0.625rem',
-          padding: '0.875rem', borderRadius: 10,
-          background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)',
-          marginBottom: '1rem',
-        }}>
-          <Shield size={15} color="var(--success)" style={{ marginTop: 1, flexShrink: 0 }} />
-          <div className="text-xs" style={{ color: 'var(--success)', lineHeight: 1.5 }}>
-            <strong>Trust-Adaptive Autonomy active</strong> — Gate enforces hard caps; session trust score determines autonomy tier.
-            {currentTier === 'low' && ' (Volume throttled to 1 item)'}
-            {currentTier !== 'high' && ' (User confirmation step required)'}
-          </div>
+      {/* Header action */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h2 className="text-base font-semibold" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Sparkles size={16} style={{ color: 'var(--primary)' }} />
+            AI Recommendations
+          </h2>
+          <span className="text-xs text-muted">Filtered by deterministic policy gate</span>
         </div>
 
         <button
-          id="get-suggestions-btn"
-          className="btn btn-primary w-full btn-lg"
+          id="generate-proposals-btn"
+          className="btn btn-primary btn-sm"
           onClick={handleGenerate}
-          disabled={loading || !canPropose}
+          disabled={loading || !sessionId}
         >
           {loading ? (
-            <><div className="spinner" style={{ borderTopColor: '#fff' }} /> Thinking...</>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="spinner" />
+              <span>Analysing cart...</span>
+            </span>
           ) : (
-            <><Sparkles size={16} /> Get AI Suggestions</>
+            <>
+              <Sparkles size={14} />
+              <span>Get Suggestions</span>
+            </>
           )}
         </button>
-        {!canPropose && (
-          <div className="text-xs text-muted" style={{ marginTop: '0.5rem', textAlign: 'center' }}>
-            Add items to your cart first
-          </div>
-        )}
-        {error && (
-          <div style={{
-            marginTop: '0.75rem', padding: '0.625rem 0.875rem',
-            background: 'var(--danger-bg)', border: '1px solid var(--danger-border)',
-            borderRadius: 8, fontSize: '0.8rem', color: 'var(--danger)',
-          }}>
-            {error}
-          </div>
-        )}
       </div>
 
-      {/* Proposals feed */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
+      {error && (
+        <div style={{
+          padding: '0.75rem 1rem', borderRadius: 8,
+          background: 'var(--danger-bg)', border: '1px solid var(--danger-border)',
+          color: 'var(--danger)', fontSize: '0.8125rem',
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Proposal list */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', overflowY: 'auto', flex: 1 }}>
         {proposals.length === 0 && !loading && (
           <div style={{
             textAlign: 'center', padding: '2rem 1rem',
@@ -161,6 +155,7 @@ export default function ProposalPanel({ cart, sessionId, onCartUpdate }: Props) 
           const isActionable = isPending || isReviewed;
           const isActing = acting === proposal.id;
           const rejectedVisible = showRejected[proposal.id];
+          const cfVisible = showCounterfactual[proposal.id];
 
           return (
             <div key={proposal.id} className="card slide-in" style={{ padding: '1.25rem' }}>
@@ -178,7 +173,7 @@ export default function ProposalPanel({ cart, sessionId, onCartUpdate }: Props) 
                   )}
                   {proposal.user_action !== 'pending' && proposal.user_action !== 'review_required' && (
                     <span className={`badge ${proposal.user_action === 'accepted' ? 'badge-success' : proposal.user_action === 'reviewed' ? 'badge-warning' : 'badge-muted'}`}>
-                      {proposal.user_action === 'accepted' ? '✓ Accepted' : proposal.user_action === 'reviewed' ? '👁 Confirmed' : '✕ Declined'}
+                      {proposal.user_action === 'accepted' ? '✓ Accepted' : proposal.user_action === 'reviewed' ? '✓ Confirmed' : '✗ Declined'}
                     </span>
                   )}
                 </div>
@@ -259,6 +254,83 @@ export default function ProposalPanel({ cart, sessionId, onCartUpdate }: Props) 
                   >
                     <X size={14} /> No thanks
                   </button>
+                </div>
+              )}
+
+              {/* Counterfactual comparison collapsible */}
+              {proposal.counterfactual && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <button
+                    className="btn btn-ghost btn-sm w-full"
+                    onClick={() => toggleCounterfactual(proposal.id)}
+                    style={{
+                      justifyContent: 'space-between',
+                      fontSize: '0.75rem',
+                      background: proposal.counterfactual.divergence_detected
+                        ? 'rgba(239, 68, 68, 0.06)'
+                        : 'rgba(59, 130, 246, 0.06)',
+                      color: proposal.counterfactual.divergence_detected
+                        ? 'var(--danger)'
+                        : 'var(--primary)',
+                      border: '1px solid',
+                      borderColor: proposal.counterfactual.divergence_detected
+                        ? 'var(--danger-border)'
+                        : 'rgba(59, 130, 246, 0.25)',
+                      borderRadius: 8,
+                      padding: '0.5rem 0.75rem',
+                    }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
+                      <Split size={13} />
+                      Proposed vs Allowed (Counterfactual)
+                      {proposal.counterfactual.divergence_detected && (
+                        <span className="badge badge-danger" style={{ fontSize: '0.65rem' }}>Divergence</span>
+                      )}
+                    </span>
+                    {cfVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+
+                  {cfVisible && (
+                    <div style={{
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      borderRadius: 8,
+                      background: 'var(--bg-input)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.75rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                        {proposal.counterfactual.summary}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                        <div style={{ padding: '0.5rem', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Raw LLM Proposal</div>
+                          {proposal.counterfactual.llm_proposed_items.map((item, idx) => (
+                            <div key={idx} style={{ marginBottom: 4, paddingBottom: 4, borderBottom: '1px dashed var(--border)' }}>
+                              <div style={{ fontWeight: 500 }}>{item.product_name}</div>
+                              <div className="text-xs text-muted">Discount: {item.discount_pct}%</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ padding: '0.5rem', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>Gate Approved</div>
+                          {proposal.accepted_items.length === 0 ? (
+                            <div className="text-xs text-muted" style={{ fontStyle: 'italic' }}>0 items allowed</div>
+                          ) : (
+                            proposal.accepted_items.map((item, idx) => (
+                              <div key={idx} style={{ marginBottom: 4, paddingBottom: 4, borderBottom: '1px dashed var(--border)' }}>
+                                <div style={{ fontWeight: 500 }}>{item.product_name}</div>
+                                <div className="text-xs" style={{ color: 'var(--success)' }}>Discount: {item.discount_pct}%</div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

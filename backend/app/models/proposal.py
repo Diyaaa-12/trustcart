@@ -1,24 +1,25 @@
-"""
+﻿"""
 Proposal and AuditLog ORM models.
 
-Proposal: every LLM recommendation batch — stores raw LLM output, gate result,
+Proposal: every LLM recommendation batch -- stores raw LLM output, gate result,
 and user action for full auditability.
 
 AuditLog: append-only event log for every meaningful action in a session.
 """
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
-
-# Use JSONB on Postgres, fall back to JSON on SQLite (for tests)
-_JSON = JSONB
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.cart import CartSession
 
 
 class Proposal(Base):
@@ -35,24 +36,24 @@ class Proposal(Base):
     )
 
     # Cart state when the proposal was generated (JSON snapshot)
-    cart_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    cart_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
     # Raw LLM response (preserved for audit / debugging)
-    llm_raw_output: Mapped[dict] = mapped_column(JSON, nullable=True)
+    llm_raw_output: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # All items the LLM proposed (before gate)
-    proposed_items: Mapped[list] = mapped_column(JSON, nullable=False)
+    proposed_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
 
     # Items accepted by the gate
-    accepted_items: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    accepted_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
 
     # Items rejected by the gate (includes rejection reason)
-    rejected_items: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    rejected_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
 
     # Gate decision: "accepted" | "rejected" | "partial"
     gate_result: Mapped[str] = mapped_column(String(20), nullable=False)
 
-    # User's final action: "pending" | "accepted" | "declined"
+    # User's final action: "pending" | "accepted" | "declined" | "review_required" | "reviewed"
     user_action: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )
@@ -65,7 +66,7 @@ class Proposal(Base):
     )
 
     # Relationships
-    session: Mapped["CartSession"] = relationship(  # noqa: F821
+    session: Mapped[CartSession] = relationship(
         "CartSession", back_populates="proposals"
     )
 
@@ -95,7 +96,7 @@ class AuditLog(Base):
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
 
     # Arbitrary JSON payload for the event
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     # Request ID for end-to-end tracing
     request_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
@@ -105,7 +106,7 @@ class AuditLog(Base):
     )
 
     # Relationships
-    session: Mapped["CartSession"] = relationship(  # noqa: F821
+    session: Mapped[CartSession] = relationship(
         "CartSession", back_populates="audit_logs"
     )
 

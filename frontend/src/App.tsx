@@ -1,10 +1,11 @@
 ﻿import { useEffect, useState } from 'react';
-import { ShieldCheck, Zap } from 'lucide-react';
-import CartView from './components/CartView';
-import ProposalPanel from './components/ProposalPanel';
-import CheckoutButton from './components/CheckoutButton';
-import { createCart, fetchCart, fetchCatalog } from './api/client';
+import { Zap, ShieldCheck, History } from 'lucide-react';
 import type { Cart, Product } from './types';
+import { createCart, fetchCart, fetchCatalog } from './api/client';
+import CartView from './components/CartView';
+import { ProposalPanel } from './components/ProposalPanel';
+import CheckoutButton from './components/CheckoutButton';
+import { AuditReplayModal } from './components/AuditReplayModal';
 import './index.css';
 
 const SESSION_KEY = 'trustcart_session_id';
@@ -15,6 +16,7 @@ export default function App() {
   const [catalog, setCatalog] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
+  const [showReplay, setShowReplay] = useState(false);
 
   // Initialize session + catalog
   useEffect(() => {
@@ -33,7 +35,6 @@ export default function App() {
             setCart(existingCart);
             setSessionId(sid);
           } catch {
-            // Session expired or invalid -- create new
             sid = null;
           }
         }
@@ -58,6 +59,16 @@ export default function App() {
     localStorage.setItem(SESSION_KEY, newCart.session_id);
     setCart(newCart);
     setSessionId(newCart.session_id);
+  };
+
+  const handleRefreshCart = async () => {
+    if (!sessionId) return;
+    try {
+      const updated = await fetchCart(sessionId);
+      setCart(updated);
+    } catch (err) {
+      console.error('Failed to refresh cart:', err);
+    }
   };
 
   if (loading) {
@@ -138,8 +149,10 @@ export default function App() {
               display: 'flex', alignItems: 'center', gap: '0.5rem',
               padding: '4px 10px', borderRadius: 999,
               background: 'var(--bg-card)', border: '1px solid var(--border)',
+              cursor: 'pointer',
             }}
-            title={`Trust Score: ${Number(trustScore).toFixed(0)}/100 (Tier: ${autonomyTier.toUpperCase()})`}
+            onClick={() => setShowReplay(true)}
+            title={`Trust Score: ${Number(trustScore).toFixed(0)}/100 (Tier: ${autonomyTier.toUpperCase()}) -- Click to open Replay`}
           >
             <div style={{
               width: 8, height: 8, borderRadius: '50%',
@@ -171,16 +184,30 @@ export default function App() {
             </span>
           </div>
 
+          {/* Audit Replay Button */}
+          <button
+            id="open-replay-btn"
+            className="btn btn-secondary btn-sm"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem' }}
+            onClick={() => setShowReplay(true)}
+            title="Open session timeline replay"
+          >
+            <History size={14} />
+            <span>Audit Replay</span>
+          </button>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <ShieldCheck size={14} color="var(--success)" />
             <span className="text-xs" style={{ color: 'var(--success)' }}>Policy Gate Active</span>
           </div>
+
           <div className="text-xs text-muted" style={{
             padding: '4px 10px', borderRadius: 999,
             background: 'var(--bg-card)', border: '1px solid var(--border)',
           }}>
             Session: {sessionId.slice(0, 8)}...
           </div>
+
           <button className="btn btn-ghost btn-sm" onClick={handleNewSession}>
             New Cart
           </button>
@@ -199,7 +226,7 @@ export default function App() {
         <span>•</span>
         <span>Agentic Commerce Track</span>
         <span>•</span>
-        <span>LLM proposes • deterministic gate decides • trust-adaptive autonomy</span>
+        <span>Bounded Autonomy + Trust Score + Full Auditability</span>
       </div>
 
       {/* Main Layout */}
@@ -225,9 +252,9 @@ export default function App() {
         {/* Right: Proposal Panel + Checkout */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', position: 'sticky', top: 80 }}>
           <ProposalPanel
-            cart={cart}
             sessionId={sessionId}
             onCartUpdate={setCart}
+            onRefreshCart={handleRefreshCart}
           />
           <div className="card" style={{ padding: '1.25rem' }}>
             <CheckoutButton cart={cart} sessionId={sessionId} />
@@ -242,7 +269,7 @@ export default function App() {
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         fontSize: '0.75rem', color: 'var(--text-muted)',
       }}>
-        <span>TrustCart • Phase 1 • Razorpay AI Buildathon 2026</span>
+        <span>TrustCart • Phase 2 • Razorpay AI Buildathon 2026</span>
         <div style={{ display: 'flex', gap: '1rem' }}>
           <a href="/api/docs" target="_blank" rel="noreferrer" style={{ color: 'var(--text-muted)', textDecoration: 'none' }}>
             API Docs
@@ -250,8 +277,21 @@ export default function App() {
           <a href={`/api/audit/${sessionId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--text-muted)', textDecoration: 'none' }}>
             Audit Log
           </a>
+          <button
+            onClick={() => setShowReplay(true)}
+            style={{ background: 'none', border: 'none', color: 'var(--accent-light)', cursor: 'pointer', fontSize: '0.75rem', padding: 0 }}
+          >
+            Replay Session
+          </button>
         </div>
       </footer>
+
+      {/* Audit Replay Modal */}
+      <AuditReplayModal
+        sessionId={sessionId}
+        isOpen={showReplay}
+        onClose={() => setShowReplay(false)}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 ﻿"""
 TrustCart Trust Score Engine
 =============================
-A **pure, deterministic function** -- no database, no LLM calls, no network
+A pure, deterministic function -- no database, no LLM calls, no network
 I/O, no side effects. Given a session proposal history and current score,
 it returns an updated score and the reason for the change.
 
@@ -35,11 +35,11 @@ Score arithmetic:
   Acceptance (clean): + ACCEPT_GAIN       (default 2.0)
   Score is clamped to [0, 100] after every update.
 """
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from enum import Enum
-from typing import Any, Sequence, Union
-
+from enum import StrEnum
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -75,7 +75,7 @@ INJECTION_SIGNATURE_REASONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
-class ChangeReason(str, Enum):
+class ChangeReason(StrEnum):
     """Machine-readable reason codes for trust score changes."""
 
     REJECTION_CLEAN = "rejection_clean"
@@ -84,7 +84,7 @@ class ChangeReason(str, Enum):
     NO_CHANGE_NEUTRAL = "no_change_neutral"
 
 
-class AutonomyTier(str, Enum):
+class AutonomyTier(StrEnum):
     """Autonomy tier derived from the current trust score."""
 
     HIGH = "high"
@@ -151,7 +151,7 @@ def _autonomy_tier(score: float) -> AutonomyTier:
     return AutonomyTier.LOW
 
 
-def get_autonomy_tier(score: Union[float, int, Decimal]) -> AutonomyTier:
+def get_autonomy_tier(score: float | int | Decimal) -> AutonomyTier:
     """Public helper to get the autonomy tier for any score."""
     return _autonomy_tier(float(score))
 
@@ -185,16 +185,25 @@ def _to_proposal_record(obj: Any) -> ProposalRecord:
         return obj
     if isinstance(obj, dict):
         gate_result = obj.get("gate_result", "")
+        extracted_from_items = [
+            item.get("reason")
+            for item in obj.get("rejected_items", [])
+            if isinstance(item, dict)
+        ]
         reasons = (
             obj.get("rejected_reasons")
             or obj.get("rejection_reasons")
-            or [item.get("reason") for item in obj.get("rejected_items", []) if isinstance(item, dict)]
+            or extracted_from_items
             or []
         )
         return ProposalRecord(gate_result=str(gate_result), rejected_reasons=list(reasons))
     # Object with attributes
     gate_result = getattr(obj, "gate_result", "")
-    reasons = getattr(obj, "rejected_reasons", None) or getattr(obj, "rejection_reasons", None) or []
+    reasons = (
+        getattr(obj, "rejected_reasons", None)
+        or getattr(obj, "rejection_reasons", None)
+        or []
+    )
     return ProposalRecord(gate_result=str(gate_result), rejected_reasons=list(reasons))
 
 
@@ -253,7 +262,7 @@ def _apply_single_proposal(
 # ---------------------------------------------------------------------------
 def compute_trust_score(
     proposal_history: Any = None,
-    current_score: Union[float, int, Decimal] = DEFAULT_SCORE,
+    current_score: float | int | Decimal = DEFAULT_SCORE,
     latest_proposal: Any = None,
 ) -> TrustScoreResult:
     """
