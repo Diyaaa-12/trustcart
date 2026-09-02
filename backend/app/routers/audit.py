@@ -237,8 +237,13 @@ async def get_session_timeline(
         select(CartSession).where(CartSession.id == session_id)
     )
     session = session_res.scalar_one_or_none()
-    current_trust = float(session.trust_score) if session else 100.0
-    current_tier = session.autonomy_tier.value if session else "high"
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart session not found",
+        )
+    current_trust = float(session.trust_score)
+    current_tier = session.autonomy_tier.value
 
     result = await db.execute(
         select(AuditLog)

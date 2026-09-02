@@ -141,7 +141,7 @@ Services will be available at:
 
 ### 3. Run the Test Suite & Quality Checks
 ```bash
-# Run all 85 automated tests with coverage
+# Run all 91 automated tests with coverage
 cd backend
 pytest -v --tb=short --cov=app --cov-report=term-missing
 
@@ -167,13 +167,16 @@ Tests:
   - tests/test_trust_adaptive_autonomy.py: 5 passed
   - tests/test_checkout.py:                7 passed
   - tests/test_prompt_injection.py:        4 passed
+  - tests/test_audit.py:                   6 passed
 ----------------------------------------------------------------------------------
-Total:                                    85 PASSED (100% success rate)
+Total:                                    91 PASSED (100% success rate)
 
 Statement Coverage Highlights:
   - app/services/policy_gate.py:          100%
   - app/services/trust_score.py:           98%
+  - app/routers/audit.py:                 100%
   - app/models/*:                          94% - 95%
   - app/schemas/*:                        100%
 ==================================================================================
 ```
+
