@@ -285,7 +285,7 @@ def compute_trust_score(
         autonomy_tier, max_proposals_override, and requires_confirmation.
     """
     # Disambiguate arguments if called as compute_trust_score(85.0, proposal)
-    if isinstance(proposal_history, (int, float, Decimal)):
+    if isinstance(proposal_history, int | float | Decimal):
         actual_score = float(proposal_history)
         proposals_input = current_score if latest_proposal is None else latest_proposal
     else:
@@ -307,7 +307,7 @@ def compute_trust_score(
         )
 
     # If a list/sequence of proposals is provided:
-    if isinstance(proposals_input, (list, tuple)):
+    if isinstance(proposals_input, list | tuple):
         if not proposals_input:
             clamped = _clamp(actual_score)
             tier = _autonomy_tier(clamped)

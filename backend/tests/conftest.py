@@ -22,9 +22,14 @@ os.environ.setdefault("APP_ENV", "test")
 # ---------------------------------------------------------------------------
 # Shared policy gate fixtures
 # ---------------------------------------------------------------------------
-from decimal import Decimal
+# Test environment setup (os.environ.setdefault) must run before importing app modules
+from decimal import Decimal  # noqa: E402
 
-from app.services.policy_gate import DEFAULT_CATEGORY_CROSS_SELL_MAP, CatalogProduct, PolicyConfig
+from app.services.policy_gate import (  # noqa: E402
+    DEFAULT_CATEGORY_CROSS_SELL_MAP,
+    CatalogProduct,
+    PolicyConfig,
+)
 
 
 @pytest.fixture
