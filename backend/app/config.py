@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     MANDATE_SECRET: str = "trustcart-ap2-mandate-secret-key-32b"  # noqa: S105
     MANDATE_TTL_MINUTES: int = 30
 
+    # Rate Limiting
+    RATE_LIMIT_PROPOSALS_PER_MINUTE: int = 30
+
+    # CORS Configuration
+    CORS_ORIGINS: str = (
+        "http://localhost:5173,http://localhost:3000,http://frontend:5173"
+    )
+
     # --- â”€â”€ ---
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"

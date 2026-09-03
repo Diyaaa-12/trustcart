@@ -41,6 +41,7 @@ from app.services.policy_gate import (
     PolicyConfig,
     run_gate,
 )
+from app.services.rate_limiter import limiter
 from app.services.trust_score import (
     AutonomyTier,
     ProposalRecord,
@@ -125,6 +126,21 @@ async def generate_proposals(
     db: AsyncSession = Depends(get_db),
 ) -> ProposalOut:
     """Generate upsell/cross-sell proposals for a cart session."""
+    allowed, retry_after = limiter.is_allowed(
+        key=str(session_id),
+        max_requests=settings.RATE_LIMIT_PROPOSALS_PER_MINUTE,
+        window_seconds=60.0,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Rate limit exceeded for proposal generation. "
+                f"Please wait {retry_after} second(s) before requesting more recommendations."
+            ),
+            headers={"Retry-After": str(retry_after)},
+        )
+
     session = await _get_session_or_404(session_id, db)
     snapshot = _cart_snapshot(session)
     cart_items_data = _cart_items_to_dicts(session)

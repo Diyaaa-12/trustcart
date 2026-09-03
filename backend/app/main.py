@@ -50,13 +50,16 @@ app = FastAPI(
 )
 
 # ── CORS ────────────────────────────────────────────────────────────────────
+def _get_cors_origins() -> list[str]:
+    raw = settings.CORS_ORIGINS
+    if isinstance(raw, str):
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return list(raw)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://frontend:5173",
-    ],
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,7 +91,8 @@ app.include_router(audit.router, prefix="/api")
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
-@app.get("/health", tags=["meta"])
+@app.get("/health", tags=["meta"], summary="Health check probe")
+@app.get("/healthz", tags=["meta"], summary="Liveness/readiness probe")
 async def health_check() -> dict:
     return {
         "status": "ok",

@@ -1,6 +1,11 @@
-"""Services package."""
+﻿"""Services package."""
 
 from app.services.agent import get_proposals
+from app.services.explanation import (
+    DecisionExplanationOut,
+    DecisionFactor,
+    build_decision_explanation,
+)
 from app.services.policy_gate import (
     CatalogProduct,
     GateResult,
@@ -10,6 +15,7 @@ from app.services.policy_gate import (
     RejectionReason,
     run_gate,
 )
+from app.services.rate_limiter import InMemoryRateLimiter, limiter
 from app.services.razorpay_service import RazorpayServiceError, create_order
 
 __all__ = [
@@ -23,16 +29,9 @@ __all__ = [
     "RejectionReason",
     "create_order",
     "RazorpayServiceError",
-]
-
-from app.services.explanation import (
-    DecisionExplanationOut,
-    DecisionFactor,
-    build_decision_explanation,
-)
-
-__all__ += [
     "build_decision_explanation",
     "DecisionExplanationOut",
     "DecisionFactor",
+    "limiter",
+    "InMemoryRateLimiter",
 ]

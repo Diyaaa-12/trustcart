@@ -118,6 +118,21 @@ Modern LLMs are stochastic and fundamentally vulnerable to adversarial prompt in
 
 ---
 
+---
+
+## Known Limitations & Hackathon Engineering Tradeoffs
+
+1. **Database Migrations (`create_all` vs. Alembic)**:
+   - For demo speed and isolated test reproducibility within a 3-day buildathon, database schema creation is handled via `Base.metadata.create_all` and startup DDL migrations rather than sequential Alembic version files. Alembic is included in `requirements.txt` as a dependency; production deployments would replace runtime `create_all()` with automated migration pipelines.
+2. **Rate Limiting Architecture**:
+   - Proposal generation is rate-limited via `InMemoryRateLimiter` (`RATE_LIMIT_PROPOSALS_PER_MINUTE=30`, returning HTTP 429 with `Retry-After`). In production, this can be seamlessly swapped to Redis-backed distributed keys via the configured `REDIS_URL`.
+3. **CORS Origins**:
+   - CORS is strictly bounded to the frontend application origin via `settings.CORS_ORIGINS` (defaulting to Vite ports `5173`/`3000` and `frontend:5173`), configurable via environment variables rather than wildcard `*`.
+4. **Health Check Probes**:
+   - Dual liveness/readiness probes are exposed at `GET /health` and `GET /healthz` for Kubernetes and Docker engine status monitoring.
+
+---
+
 ## What Broke During Development & How It Was Fixed
 
 ### 1. Budget vs. Item Discount Check Ordering Interaction
@@ -182,7 +197,7 @@ Services will be available at:
 
 ### 3. Run the Test Suite & Quality Checks
 ```bash
-# Run all 134 automated tests with coverage
+# Run all 141 automated tests with coverage
 cd backend
 pytest -v --tb=short --cov=app --cov-report=term-missing
 
@@ -207,19 +222,21 @@ Tests:
   - tests/test_policy_gate.py:            33 passed
   - tests/test_mandate.py:                21 passed
   - tests/test_decision_explanation.py:   16 passed
+  - tests/test_rate_limiter.py:            7 passed
   - tests/test_checkout.py:                7 passed
   - tests/test_audit.py:                   6 passed
   - tests/test_catalog_agent.py:           6 passed
   - tests/test_trust_adaptive_autonomy.py: 5 passed
   - tests/test_prompt_injection.py:        4 passed
 ----------------------------------------------------------------------------------
-Total:                                   134 PASSED (100% success rate, 0 regressions)
+Total:                                   141 PASSED (100% success rate, 0 regressions)
 
 Statement Coverage Highlights:
   - app/services/mandate.py:              100%
   - app/services/policy_gate.py:          100%
   - app/services/explanation.py:           97%
   - app/services/trust_score.py:           98%
+  - app/services/rate_limiter.py:          93%
   - app/routers/audit.py:                  93%
   - app/schemas/*:                        100%
   - app/models/*:                          94% - 95%
