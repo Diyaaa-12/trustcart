@@ -24,3 +24,15 @@ __all__ = [
     "create_order",
     "RazorpayServiceError",
 ]
+
+from app.services.explanation import (
+    DecisionExplanationOut,
+    DecisionFactor,
+    build_decision_explanation,
+)
+
+__all__ += [
+    "build_decision_explanation",
+    "DecisionExplanationOut",
+    "DecisionFactor",
+]

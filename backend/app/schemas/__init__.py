@@ -1,6 +1,11 @@
 """Schemas package."""
 
 from app.schemas.cart import AddItemRequest, CartItemOut, CartOut, RemoveItemRequest
+from app.schemas.catalog import (
+    AgentCatalogEntry,
+    AgentCatalogResponse,
+    AgentPolicyConstraints,
+)
 from app.schemas.checkout import CheckoutErrorOut, CheckoutOut, CheckoutRequest
 from app.schemas.proposal import (
     AcceptedItemOut,
@@ -25,4 +30,7 @@ __all__ = [
     "UserActionRequest",
     "AuditEventOut",
     "SessionTimelineOut",
+    "AgentCatalogEntry",
+    "AgentCatalogResponse",
+    "AgentPolicyConstraints",
 ]

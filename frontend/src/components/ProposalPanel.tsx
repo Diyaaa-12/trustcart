@@ -10,9 +10,10 @@ import {
   ShieldX,
   AlertTriangle,
   Split,
+  HelpCircle,
 } from 'lucide-react';
-import type { Cart, Proposal } from '../types';
-import { generateProposals, recordAction, fetchCart } from '../api/client';
+import type { Cart, DecisionExplanation, Proposal } from '../types';
+import { generateProposals, recordAction, fetchCart, getDecisionExplanation } from '../api/client';
 
 interface Props {
   sessionId: string;
@@ -27,6 +28,25 @@ export function ProposalPanel({ sessionId, onCartUpdate, onRefreshCart }: Props)
   const [error, setError] = useState<string | null>(null);
   const [showRejected, setShowRejected] = useState<Record<string, boolean>>({});
   const [showCounterfactual, setShowCounterfactual] = useState<Record<string, boolean>>({});
+  const [explanations, setExplanations] = useState<Record<string, DecisionExplanation>>({});
+  const [loadingExpl, setLoadingExpl] = useState<Record<string, boolean>>({});
+  const [showExpl, setShowExpl] = useState<Record<string, boolean>>({});
+
+  const toggleExplanation = async (proposalId: string) => {
+    const next = !showExpl[proposalId];
+    setShowExpl(prev => ({ ...prev, [proposalId]: next }));
+    if (next && !explanations[proposalId]) {
+      setLoadingExpl(prev => ({ ...prev, [proposalId]: true }));
+      try {
+        const expl = await getDecisionExplanation(sessionId, proposalId);
+        setExplanations(prev => ({ ...prev, [proposalId]: expl }));
+      } catch (e) {
+        console.error("Failed to load decision explanation", e);
+      } finally {
+        setLoadingExpl(prev => ({ ...prev, [proposalId]: false }));
+      }
+    }
+  };
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -254,6 +274,75 @@ export function ProposalPanel({ sessionId, onCartUpdate, onRefreshCart }: Props)
                   >
                     <X size={14} /> No thanks
                   </button>
+                </div>
+              )}
+
+              {/* Explain Decision Button */}
+              <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => toggleExplanation(proposal.id)}
+                  style={{
+                    fontSize: '0.75rem',
+                    padding: '0.3rem 0.6rem',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                  }}
+                  title="Explain the policy gate decision in plain English"
+                >
+                  <HelpCircle size={13} color="var(--accent-light)" />
+                  <span>{showExpl[proposal.id] ? 'Hide Explanation' : 'Why this decision?'}</span>
+                </button>
+              </div>
+
+              {/* Plain-Language Explanation Panel */}
+              {showExpl[proposal.id] && (
+                <div style={{
+                  marginTop: '0.5rem',
+                  padding: '0.85rem',
+                  borderRadius: 8,
+                  background: 'rgba(99,102,241,0.06)',
+                  border: '1px solid rgba(99,102,241,0.22)',
+                  fontSize: '0.8125rem',
+                  lineHeight: 1.5,
+                }}>
+                  {loadingExpl[proposal.id] ? (
+                    <div className="flex items-center gap-2 text-muted">
+                      <div className="spinner" style={{ width: 14, height: 14 }} />
+                      <span>Loading decision trace...</span>
+                    </div>
+                  ) : explanations[proposal.id] ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <div style={{ fontWeight: 600, color: 'var(--accent-light)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>Explainable Policy Trace</span>
+                      </div>
+                      <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+                        {explanations[proposal.id].explanation}
+                      </p>
+                      {explanations[proposal.id].factors && explanations[proposal.id].factors.length > 0 && (
+                        <div style={{ marginTop: '0.35rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          {explanations[proposal.id].factors.map((f, idx) => (
+                            <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.75rem' }}>
+                              <span style={{ color: f.passed ? 'var(--success)' : 'var(--danger)', marginTop: 1, fontWeight: 700 }}>
+                                {f.passed ? '✓' : '✕'}
+                              </span>
+                              <div>
+                                <strong style={{ color: 'var(--text-primary)' }}>{f.title}:</strong>{' '}
+                                <span className="text-muted">{f.detail}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-danger" style={{ fontSize: '0.75rem' }}>
+                      Unable to retrieve decision explanation.
+                    </div>
+                  )}
                 </div>
               )}
 

@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.cart import CartSession
-from app.models.proposal import AuditLog
+from app.models.product import Product
+from app.models.proposal import AuditLog, Proposal
 from app.schemas.proposal import (
     AuditEventOut,
     AuditReplayOut,
@@ -21,6 +22,11 @@ from app.schemas.proposal import (
     SessionTimelineOut,
     TrustScoreHistoryEntry,
 )
+from app.services.explanation import (
+    DecisionExplanationOut,
+    build_decision_explanation,
+)
+from app.services.mandate import compute_mandate_fingerprint
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -366,4 +372,165 @@ async def get_session_replay(
         current_trust_score=float(session.trust_score),
         current_autonomy_tier=session.autonomy_tier.value,
         steps=replay_steps,
+    )
+
+
+@router.get(
+    "/{session_id}/explain/{proposal_id}",
+    response_model=DecisionExplanationOut,
+    summary="Plain-language explanation of a proposal policy decision",
+    description=(
+        "Generates a deterministic, plain-English explanation for a specific proposal decision. "
+        "Reconstructs the complete decision narrative directly from stored proposal gate results, "
+        "counterfactual divergences, mandate verification status, and trust score deltas. "
+        "100% deterministic with zero LLM hallucinations."
+    ),
+)
+async def explain_proposal_decision(
+    session_id: uuid.UUID,
+    proposal_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> DecisionExplanationOut:
+    """Generate a plain-English, deterministic explanation for a proposal's policy outcome."""
+    session_res = await db.execute(
+        select(CartSession).where(CartSession.id == session_id)
+    )
+    session = session_res.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart session not found",
+        )
+
+    prop_res = await db.execute(
+        select(Proposal).where(Proposal.id == proposal_id)
+    )
+    proposal = prop_res.scalar_one_or_none()
+    if proposal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proposal not found",
+        )
+    if proposal.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proposal does not belong to session",
+        )
+
+    # Collect product IDs from proposal to look up names
+    product_ids: set[int] = set()
+    for item in (proposal.proposed_items or []):
+        if isinstance(item, dict) and "product_id" in item:
+            product_ids.add(int(item["product_id"]))
+    for item in (proposal.accepted_items or []):
+        if isinstance(item, dict) and "product_id" in item:
+            product_ids.add(int(item["product_id"]))
+    for item in (proposal.rejected_items or []):
+        if isinstance(item, dict) and "product_id" in item:
+            product_ids.add(int(item["product_id"]))
+
+    product_names: dict[int, str] = {}
+    if product_ids:
+        prod_res = await db.execute(
+            select(Product).where(Product.id.in_(product_ids))
+        )
+        for p in prod_res.scalars().all():
+            product_names[p.id] = p.name
+
+    # Audit events for this session to get exact trust & mandate metrics
+    events_res = await db.execute(
+        select(AuditLog)
+        .where(AuditLog.session_id == session_id)
+        .order_by(AuditLog.created_at.asc())
+    )
+    events = list(events_res.scalars().all())
+
+    gate_event = None
+    gate_event_idx = -1
+    for idx, e in enumerate(events):
+        if e.event_type == "gate.decision" and isinstance(e.payload, dict):
+            if str(e.payload.get("proposal_id")) == str(proposal_id):
+                gate_event = e
+                gate_event_idx = idx
+                break
+
+    trust_event = None
+    if gate_event_idx >= 0:
+        for idx in range(gate_event_idx, -1, -1):
+            if events[idx].event_type == "trust_score.updated" and isinstance(
+                events[idx].payload, dict
+            ):
+                trust_event = events[idx]
+                break
+
+    if trust_event is None:
+        for e in events:
+            if e.event_type == "trust_score.updated" and isinstance(e.payload, dict):
+                trust_event = e
+                break
+
+    old_score = 100.0
+    new_score = 100.0
+    score_delta = 0.0
+    old_tier = "high"
+    new_tier = "high"
+    if trust_event and isinstance(trust_event.payload, dict):
+        old_score = float(trust_event.payload.get("old_score", 100.0))
+        new_score = float(trust_event.payload.get("new_score", 100.0))
+        score_delta = float(trust_event.payload.get("delta", 0.0))
+        new_tier = str(trust_event.payload.get("autonomy_tier", "high"))
+        if old_score >= 70.0:
+            old_tier = "high"
+        elif old_score >= 40.0:
+            old_tier = "medium"
+        else:
+            old_tier = "low"
+    else:
+        new_score = float(session.trust_score)
+        old_score = new_score
+        new_tier = session.autonomy_tier.value
+        old_tier = new_tier
+
+    mandate_fp = None
+    mandate_verified = True
+    mandate_failure_reason = None
+    mandate_max_disc = 10.0
+    if session.mandate_payload:
+        mandate_fp = compute_mandate_fingerprint(session.mandate_payload)
+        mandate_max_disc = float(
+            session.mandate_payload.get("max_cumulative_discount_pct", 10.0)
+        )
+
+    for e in events:
+        if e.event_type == "mandate.verified" and isinstance(e.payload, dict):
+            if e.payload.get("is_valid") is False:
+                mandate_verified = False
+                mandate_failure_reason = str(
+                    e.payload.get("verification_result", "mandate_invalid")
+                )
+
+    requires_review = (
+        gate_event.payload.get("requires_review", False)
+        if (gate_event and isinstance(gate_event.payload, dict))
+        else (new_tier.lower() in ("medium", "low"))
+    )
+
+    return build_decision_explanation(
+        proposal_id=str(proposal_id),
+        session_id=str(session_id),
+        gate_result=proposal.gate_result,
+        proposed_items=proposal.proposed_items or [],
+        accepted_items=proposal.accepted_items or [],
+        rejected_items=proposal.rejected_items or [],
+        product_names=product_names,
+        old_score=old_score,
+        new_score=new_score,
+        score_delta=score_delta,
+        old_autonomy_tier=old_tier,
+        new_autonomy_tier=new_tier,
+        requires_review=requires_review,
+        mandate_fingerprint=mandate_fp,
+        mandate_verified=mandate_verified,
+        mandate_failure_reason=mandate_failure_reason,
+        mandate_max_discount_pct=mandate_max_disc,
     )

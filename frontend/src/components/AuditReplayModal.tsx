@@ -10,11 +10,12 @@ import {
   AlertTriangle,
   CreditCard,
   Key,
+  HelpCircle,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import type { AuditReplay, ReplayStep } from '../types';
-import { getAuditReplay } from '../api/client';
+import type { AuditReplay, DecisionExplanation, ReplayStep } from '../types';
+import { getAuditReplay, getDecisionExplanation } from '../api/client';
 
 interface Props {
   sessionId: string;
@@ -27,6 +28,21 @@ export function AuditReplayModal({ sessionId, isOpen, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
+  const [explanations, setExplanations] = useState<Record<string, DecisionExplanation>>({});
+  const [loadingExpl, setLoadingExpl] = useState<Record<string, boolean>>({});
+
+  const fetchExpl = async (proposalId: string) => {
+    if (explanations[proposalId]) return;
+    setLoadingExpl(prev => ({ ...prev, [proposalId]: true }));
+    try {
+      const res = await getDecisionExplanation(sessionId, proposalId);
+      setExplanations(prev => ({ ...prev, [proposalId]: res }));
+    } catch (err) {
+      console.error('Failed to fetch explanation', err);
+    } finally {
+      setLoadingExpl(prev => ({ ...prev, [proposalId]: false }));
+    }
+  };
 
   const loadReplay = async () => {
     if (!sessionId) return;
@@ -304,6 +320,45 @@ export function AuditReplayModal({ sessionId, isOpen, onClose }: Props) {
                           fontSize: '0.75rem',
                         }}
                       >
+                        {typeof step.details?.proposal_id === 'string' && (
+                          <div style={{ marginBottom: '0.75rem' }}>
+                            {!explanations[step.details.proposal_id] ? (
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => fetchExpl(step.details.proposal_id as string)}
+                                disabled={loadingExpl[step.details.proposal_id]}
+                                style={{
+                                  fontSize: '0.75rem',
+                                  padding: '0.25rem 0.5rem',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 6,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                }}
+                              >
+                                <HelpCircle size={13} color="var(--accent-light)" />
+                                <span>{loadingExpl[step.details.proposal_id] ? 'Loading explanation...' : 'Explain Policy Decision'}</span>
+                              </button>
+                            ) : (
+                              <div style={{
+                                padding: '0.65rem 0.85rem',
+                                borderRadius: 6,
+                                background: 'rgba(99,102,241,0.08)',
+                                border: '1px solid rgba(99,102,241,0.25)',
+                                fontSize: '0.78rem',
+                                lineHeight: 1.45,
+                              }}>
+                                <div style={{ fontWeight: 600, color: 'var(--accent-light)', marginBottom: 2 }}>
+                                  {explanations[step.details.proposal_id].summary}
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)' }}>
+                                  {explanations[step.details.proposal_id].explanation}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
                           Event Payload Data
                         </div>

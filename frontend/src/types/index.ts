@@ -107,3 +107,28 @@ export interface AuditReplay {
   current_autonomy_tier: string;
   steps: ReplayStep[];
 }
+
+
+export interface DecisionFactor {
+  category: string;
+  passed: boolean;
+  title: string;
+  detail: string;
+}
+
+export interface DecisionExplanation {
+  proposal_id: string;
+  session_id: string;
+  gate_result: 'accepted' | 'rejected' | 'partial';
+  summary: string;
+  explanation: string;
+  mandate_fingerprint?: string;
+  mandate_verified: boolean;
+  old_score: number;
+  new_score: number;
+  score_delta: number;
+  old_autonomy_tier: string;
+  new_autonomy_tier: string;
+  requires_review: boolean;
+  factors: DecisionFactor[];
+}
