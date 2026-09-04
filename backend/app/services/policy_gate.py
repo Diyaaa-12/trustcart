@@ -247,6 +247,15 @@ def run_gate(
                 )
                 for item in proposed_items
             ]
+            if not rejected_all:
+                rejected_all = [
+                    RejectedItem(
+                        product_id=0,
+                        proposed_discount_pct=Decimal("0"),
+                        reason=m_reason,
+                        detail=m_detail,
+                    )
+                ]
             return GateResult(
                 accepted_items=[],
                 rejected_items=rejected_all,

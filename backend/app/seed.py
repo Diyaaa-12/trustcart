@@ -135,7 +135,7 @@ PRODUCTS = [
     },
     # ── Books ──────────────────────────────────────────────────────────────
     {
-        "name": "Deep Work — Cal Newport",
+        "name": "Deep Work - Cal Newport",
         "description": "Rules for focused success in a distracted world. Paperback, 304 pages.",
         "price": "499.00",
         "category": "Books",

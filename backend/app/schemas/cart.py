@@ -1,8 +1,13 @@
-﻿"""Pydantic schemas for cart endpoints."""
+"""Pydantic schemas for cart endpoints."""
 import uuid
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class UpdateItemRequest(BaseModel):
+    """Update item quantity. Quantity 0 removes the item."""
+
+    quantity: int = Field(..., ge=0, le=100)
 
 
 class AddItemRequest(BaseModel):
@@ -20,8 +25,8 @@ class CartItemOut(BaseModel):
     product_name: str
     category: str
     quantity: int
-    unit_price: Decimal
-    line_total: Decimal
+    unit_price: float
+    line_total: float
 
 
 class MandateOut(BaseModel):
@@ -39,12 +44,12 @@ class CartOut(BaseModel):
 
     session_id: uuid.UUID
     items: list[CartItemOut]
-    subtotal: Decimal
-    discount_budget_used_pct: Decimal
-    discount_budget_remaining_pct: Decimal
+    subtotal: float
+    discount_budget_used_pct: float
+    discount_budget_remaining_pct: float
     item_count: int
     # Trust-adaptive autonomy fields
-    trust_score: Decimal
+    trust_score: float
     autonomy_tier: str  # "high" | "medium" | "low"
     # Cryptographic spend mandate (AP2)
     mandate: MandateOut | None = None

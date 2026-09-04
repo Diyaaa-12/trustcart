@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # --- â”€â”€ ---
     LLM_PROVIDER: str = "gemini"          # "gemini" | "openai"
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
 

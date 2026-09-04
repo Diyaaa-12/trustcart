@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   X,
   RefreshCw,
@@ -192,7 +192,7 @@ export function AuditReplayModal({ sessionId, isOpen, onClose }: Props) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <div>
                 <span className="text-muted">Current Trust: </span>
-                <strong>{replay.current_trust_score.toFixed(0)}/100</strong>
+                <strong>{Number(replay.current_trust_score).toFixed(0)}/100</strong>
               </div>
               <span
                 className={`badge ${

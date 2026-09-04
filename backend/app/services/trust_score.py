@@ -239,7 +239,7 @@ def _apply_single_proposal(
             f"All proposed items passed the policy gate cleanly. "
             f"Score increased by {delta:.1f}."
         )
-    elif gate_result in ("rejected", "partial"):
+    elif gate_result in ("rejected", "partial", "mandate_invalid", "mandate_expired"):
         is_mandate = any(_extract_reason_str(r) in MANDATE_BREACH_REASONS for r in rejected_reasons)
         injection = _is_injection_signal(rejected_reasons)
         if is_mandate:

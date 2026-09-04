@@ -14,6 +14,7 @@ Key invariants:
 from __future__ import annotations
 
 import logging
+import structlog
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -49,6 +50,7 @@ from app.services.trust_score import (
 )
 
 logger = logging.getLogger(__name__)
+slogger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/proposals", tags=["proposals"])
 
 
@@ -109,7 +111,16 @@ async def _write_audit(
     ))
 
 
-def _gate_result_label(accepted: int, rejected: int) -> str:
+def _gate_result_label(
+    accepted: int,
+    rejected: int,
+    mandate_valid: bool = True,
+    mandate_reason: str = "",
+) -> str:
+    if not mandate_valid:
+        return "mandate_expired" if mandate_reason == "mandate_expired" else "mandate_invalid"
+    if accepted == 0 and rejected == 0:
+        return "no_proposals"
     if accepted > 0 and rejected == 0:
         return "accepted"
     if accepted == 0:
@@ -240,6 +251,14 @@ async def generate_proposals(
         require_mandate=True,
         mandate_secret=settings.MANDATE_SECRET,
     )
+    slogger.info(
+        "DETAILED_LOG: What reached policy_gate.py",
+        session_id=str(session_id),
+        proposed_items_count=len(proposed_items),
+        proposed_items=[{"product_id": i.product_id, "discount_pct": str(i.discount_pct)} for i in proposed_items],
+        llm_raw_output=llm_raw,
+        cart_items=cart_items_data,
+    )
     gate_result = run_gate(
         proposed_items=proposed_items,
         catalog=catalog_for_gate,
@@ -250,9 +269,19 @@ async def generate_proposals(
         mandate_signature=session.mandate_signature,
         mandate_secret=settings.MANDATE_SECRET,
     )
-
+    slogger.info(
+        "DETAILED_LOG: policy_gate.py evaluation results",
+        session_id=str(session_id),
+        accepted_count=len(gate_result.accepted_items),
+        accepted_items=[{"product_id": a.product_id, "discount_pct": str(a.discount_pct)} for a in gate_result.accepted_items],
+        rejected_count=len(gate_result.rejected_items),
+        rejected_items=[{"product_id": r.product_id, "reason": r.reason.value, "detail": r.detail} for r in gate_result.rejected_items],
+    )
     gate_label = _gate_result_label(
-        len(gate_result.accepted_items), len(gate_result.rejected_items)
+        len(gate_result.accepted_items),
+        len(gate_result.rejected_items),
+        mandate_valid=is_m_valid,
+        mandate_reason=m_reason,
     )
     logger.info(
         "Gate decision",
@@ -336,15 +365,15 @@ async def generate_proposals(
             accepted_out.append(AcceptedItemOut(
                 product_id=acc.product_id,
                 product_name=p.name,
-                original_price=p.price,
-                discount_pct=acc.discount_pct,
-                discounted_price=p.price * (1 - disc),
+                original_price=float(p.price),
+                discount_pct=float(acc.discount_pct),
+                discounted_price=float(p.price * (1 - disc)),
             ))
 
     rejected_out = [
         RejectedItemOut(
             product_id=r.product_id,
-            proposed_discount_pct=r.proposed_discount_pct,
+            proposed_discount_pct=float(r.proposed_discount_pct),
             reason=r.reason.value,
             detail=r.detail,
         )
@@ -361,12 +390,20 @@ async def generate_proposals(
             "discount_pct": float(i.discount_pct),
         })
 
-    summary_msg = (
-        f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
-        f"{len(rejected_out)} rejected."
-        if len(rejected_out) > 0
-        else f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
-    )
+    if not is_m_valid:
+        if m_reason == "mandate_expired":
+            summary_msg = "Evaluation blocked: AP2 spend mandate has expired. Reissue authorization to continue."
+        else:
+            summary_msg = "Evaluation blocked: Cryptographic spend mandate signature verification failed or tampered."
+    elif len(proposed_items) == 0:
+        summary_msg = "Agent proposed 0 items; nothing to evaluate."
+    elif len(rejected_out) > 0:
+        summary_msg = (
+            f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
+            f"{len(rejected_out)} rejected."
+        )
+    else:
+        summary_msg = f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
 
     counterfactual = CounterfactualComparison(
         llm_proposed_items=llm_items_out,
@@ -485,15 +522,15 @@ async def record_user_action(
             accepted_out.append(AcceptedItemOut(
                 product_id=acc["product_id"],
                 product_name=p.name,
-                original_price=p.price,
-                discount_pct=Decimal(acc["discount_pct"]),
-                discounted_price=p.price * (1 - disc),
+                original_price=float(p.price),
+                discount_pct=float(acc["discount_pct"]),
+                discounted_price=float(p.price * (1 - disc)),
             ))
 
     rejected_out = [
         RejectedItemOut(
             product_id=r["product_id"],
-            proposed_discount_pct=Decimal(r["proposed_discount_pct"]),
+            proposed_discount_pct=float(r["proposed_discount_pct"]),
             reason=r["reason"],
             detail=r["detail"],
         )
@@ -511,12 +548,17 @@ async def record_user_action(
             "discount_pct": float(Decimal(str(i["discount_pct"]))),
         })
 
-    summary_msg = (
-        f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
-        f"{len(rejected_out)} rejected."
-        if len(rejected_out) > 0
-        else f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
-    )
+    if proposal.gate_result in ("mandate_invalid", "mandate_expired"):
+        summary_msg = "Evaluation blocked: AP2 spend mandate verification failed."
+    elif len(proposal.proposed_items) == 0:
+        summary_msg = "Agent proposed 0 items; nothing to evaluate."
+    elif len(rejected_out) > 0:
+        summary_msg = (
+            f"Policy gate intercepted proposals: {len(accepted_out)} allowed, "
+            f"{len(rejected_out)} rejected."
+        )
+    else:
+        summary_msg = f"Policy gate cleanly approved all {len(accepted_out)} proposed item(s)."
 
     counterfactual = CounterfactualComparison(
         llm_proposed_items=llm_items_out,

@@ -1,4 +1,4 @@
-﻿/** Typed API client -- all requests go through /api (proxied by Vite). */
+/** Typed API client -- all requests go through /api (proxied by Vite). */
 import axios from 'axios';
 import type { AuditReplay, Cart, CheckoutResult, DecisionExplanation, Product, Proposal } from '../types';
 
@@ -20,6 +20,30 @@ export const addToCart = (sessionId: string, productId: number, quantity = 1): P
 
 export const removeFromCart = (sessionId: string, productId: number): Promise<Cart> =>
   api.delete<Cart>(`/cart/${sessionId}/items/${productId}`).then(r => r.data);
+
+export const updateCartItemQuantity = async (
+  sessionId: string,
+  productId: number,
+  newQuantity: number
+): Promise<Cart> => {
+  if (newQuantity <= 0) {
+    return removeFromCart(sessionId, productId);
+  }
+  return api
+    .patch<Cart>(`/cart/${sessionId}/items/${productId}`, { quantity: newQuantity })
+    .then(r => r.data)
+    .catch(async err => {
+      // Fallback in case PATCH is unavailable: delete and re-add
+      if (err?.response?.status === 404 || err?.response?.status === 405) {
+        await removeFromCart(sessionId, productId);
+        return addToCart(sessionId, productId, newQuantity);
+      }
+      throw err;
+    });
+};
+
+export const refreshMandate = (sessionId: string): Promise<Cart> =>
+  api.post<Cart>(`/cart/${sessionId}/mandate/refresh`).then(r => r.data);
 
 // Proposals
 export const generateProposals = (sessionId: string): Promise<Proposal> =>

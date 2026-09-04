@@ -1,4 +1,4 @@
-﻿"""
+"""
 Cart router -- CRUD operations on CartSession and CartItem.
 
 Security invariant: clients NEVER send prices. All unit_price values are
@@ -19,7 +19,7 @@ from app.database import get_db
 from app.models.cart import CartItem, CartSession
 from app.models.product import Product
 from app.models.proposal import AuditLog
-from app.schemas.cart import AddItemRequest, CartItemOut, CartOut
+from app.schemas.cart import AddItemRequest, CartItemOut, CartOut, UpdateItemRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cart", tags=["cart"])
@@ -53,8 +53,8 @@ def _build_cart_out(session: CartSession) -> CartOut:
                 product_name=ci.product.name,
                 category=ci.product.category,
                 quantity=ci.quantity,
-                unit_price=ci.unit_price,
-                line_total=line_total,
+                unit_price=float(ci.unit_price),
+                line_total=float(line_total),
             )
         )
     budget_remaining = max(
@@ -88,11 +88,11 @@ def _build_cart_out(session: CartSession) -> CartOut:
     return CartOut(
         session_id=session.id,
         items=items_out,
-        subtotal=subtotal,
-        discount_budget_used_pct=session.discount_budget_used_pct,
-        discount_budget_remaining_pct=budget_remaining,
+        subtotal=float(subtotal),
+        discount_budget_used_pct=float(session.discount_budget_used_pct),
+        discount_budget_remaining_pct=float(budget_remaining),
         item_count=sum(ci.quantity for ci in session.items),
-        trust_score=session.trust_score,
+        trust_score=float(session.trust_score),
         autonomy_tier=session.autonomy_tier.value,
         mandate=mandate_out,
     )
@@ -230,6 +230,7 @@ async def add_item(
         },
     )
     await db.commit()
+    db.expire_all()
 
     session = await _get_session_or_404(session_id, db)
     logger.info(
@@ -263,9 +264,123 @@ async def remove_item(
     await db.delete(item)
     await _write_audit(db, session_id, "cart.item_removed", {"product_id": product_id})
     await db.commit()
+    db.expire_all()
 
     session = await _get_session_or_404(session_id, db)
     logger.info(
         "Item removed from cart", extra={"session_id": str(session_id), "product_id": product_id}
     )
     return _build_cart_out(session)
+
+
+@router.patch("/{session_id}/items/{product_id}", response_model=CartOut)
+async def update_item_quantity(
+    session_id: uuid.UUID,
+    product_id: int,
+    body: UpdateItemRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CartOut:
+    """Update quantity of an item in the cart. Setting quantity to 0 removes the item."""
+    session = await _get_session_or_404(session_id, db)
+
+    result = await db.execute(
+        select(CartItem).where(
+            CartItem.session_id == session_id,
+            CartItem.product_id == product_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Product {product_id} not in cart",
+        )
+
+    if body.quantity <= 0:
+        await db.delete(existing)
+        await _write_audit(db, session_id, "cart.item_removed", {"product_id": product_id})
+    else:
+        product_result = await db.execute(
+            select(Product).where(Product.id == product_id, Product.is_active == True)
+        )
+        product = product_result.scalar_one_or_none()
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Product {product_id} not found or inactive",
+            )
+        if product.stock < body.quantity:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Insufficient stock: requested {body.quantity}, available {product.stock}",
+            )
+
+        existing.quantity = body.quantity
+        await _write_audit(
+            db,
+            session_id,
+            "cart.item_updated",
+            {
+                "product_id": product_id,
+                "product_name": product.name,
+                "quantity": body.quantity,
+                "unit_price": float(existing.unit_price),
+            },
+        )
+
+    await db.commit()
+    db.expire_all()
+    session = await _get_session_or_404(session_id, db)
+    logger.info(
+        "Item quantity updated",
+        extra={"session_id": str(session_id), "product_id": product_id, "quantity": body.quantity},
+    )
+    return _build_cart_out(session)
+
+
+@router.post("/{session_id}/mandate/refresh", response_model=CartOut)
+async def refresh_mandate(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> CartOut:
+    """
+    Reissue a fresh signed spend mandate for an existing cart session.
+    Preserves all cart items and bounds while resetting temporal validity.
+    """
+    session = await _get_session_or_404(session_id, db)
+
+    from app.services.mandate import (
+        compute_mandate_fingerprint,
+        create_mandate,
+        mandate_to_dict,
+    )
+
+    mandate_obj, signature = create_mandate(
+        session_id=session.id,
+        secret=settings.MANDATE_SECRET,
+        max_cumulative_discount_pct=settings.MAX_DISCOUNT_BUDGET_PCT,
+        max_items_per_proposal=settings.MAX_PROPOSALS_PER_CART,
+        ttl_minutes=settings.MANDATE_TTL_MINUTES,
+    )
+    session.mandate_payload = mandate_to_dict(mandate_obj)
+    session.mandate_signature = signature
+
+    await _write_audit(
+        db,
+        session.id,
+        "mandate.reissued",
+        {
+            "mandate_fingerprint": compute_mandate_fingerprint(session.mandate_payload),
+            "max_cumulative_discount_pct": float(mandate_obj.max_cumulative_discount_pct),
+            "max_items": mandate_obj.max_items_per_proposal,
+            "expires_at": mandate_obj.expires_at,
+            "issued_at": mandate_obj.issued_at,
+        },
+    )
+    await db.commit()
+    db.expire_all()
+
+    session = await _get_session_or_404(session_id, db)
+    logger.info("Mandate refreshed for cart session", extra={"session_id": str(session.id)})
+    return _build_cart_out(session)
+

@@ -430,7 +430,7 @@ class TestMandateAPIE2E:
         prop_data = prop_res.json()
 
         # Gate should reject all proposals due to mandate verification failure
-        assert prop_data["gate_result"] == "rejected"
+        assert prop_data["gate_result"] in ("rejected", "mandate_invalid")
         assert len(prop_data["accepted_items"]) == 0
         assert any(r["reason"] == "mandate_invalid" for r in prop_data["rejected_items"])
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Upsell / cross-sell agent.
 
 Calls the configured LLM (Gemini 2.5 Flash by default) to generate
@@ -14,6 +14,7 @@ Key design:
 """
 import json
 import logging
+import structlog
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -21,6 +22,7 @@ from app.config import settings
 from app.services.policy_gate import ProposedItem
 
 logger = logging.getLogger(__name__)
+slogger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -35,8 +37,9 @@ IMPORTANT RULES:
 2. Recommend between 1 and 3 products.
 3. Each recommendation may include a discount_pct between 0 and 20 (percent).
 4. Choose items that are actually useful together with the cart contents.
+5. Do not recommend products that are already in the customer's cart.
 
-You MUST respond with valid JSON only â€” no markdown, no explanation, just JSON.
+You MUST respond with valid JSON only — no markdown, no explanation, just JSON.
 
 Response format:
 {
@@ -55,15 +58,16 @@ def _build_user_prompt(
     cart_items: list[dict[str, Any]],
     catalog_items: list[dict[str, Any]],
 ) -> str:
+    cart_pids = {item.get("product_id") for item in cart_items if "product_id" in item}
     cart_lines = "\n".join(
         f"  - {item['name']} (qty: {item['quantity']}, "
-        f"â‚¹{item['unit_price']}, category: {item['category']})"
+        f"₹{item['unit_price']}, category: {item['category']})"
         for item in cart_items
     )
     catalog_lines = "\n".join(
-        f"  - ID {p['id']}: {p['name']} | â‚¹{p['price']} | {p['category']}"
+        f"  - ID {p['id']}: {p['name']} | ₹{p['price']} | {p['category']}"
         for p in catalog_items
-        if not p.get("is_demo_fixture", False)  # exclude demo fixtures
+        if not p.get("is_demo_fixture", False) and p.get("id") not in cart_pids
     )
     return (
         f"Current cart contents:\n{cart_lines}\n\n"
@@ -81,12 +85,22 @@ def _parse_recommendations(raw: str) -> tuple[list[ProposedItem], dict[str, Any]
     Returns (proposed_items, raw_output_dict).
     Errors are logged; malformed entries are skipped (not crashed).
     """
+    slogger.info(
+        "DETAILED_LOG: raw LLM response received",
+        raw_llm_response=raw,
+    )
     raw_output: dict[str, Any] = {"raw_text": raw}
     try:
         data = json.loads(raw)
+        slogger.info(
+            "DETAILED_LOG: JSON parsing succeeded",
+            parsed_data=data,
+        )
     except json.JSONDecodeError as exc:
-        logger.warning(
-            "LLM response is not valid JSON", extra={"error": str(exc), "raw": raw[:500]}
+        slogger.warning(
+            "DETAILED_LOG: JSON parsing failed",
+            error=str(exc),
+            raw_text=raw,
         )
         raw_output["parse_error"] = str(exc)
         return [], raw_output
@@ -94,7 +108,10 @@ def _parse_recommendations(raw: str) -> tuple[list[ProposedItem], dict[str, Any]
     raw_output["parsed"] = data
     recommendations = data.get("recommendations", [])
     if not isinstance(recommendations, list):
-        logger.warning("LLM 'recommendations' field is not a list", extra={"data": data})
+        slogger.warning(
+            "DETAILED_LOG: LLM recommendations field is not a list",
+            data=data,
+        )
         return [], raw_output
 
     proposed: list[ProposedItem] = []
@@ -104,10 +121,17 @@ def _parse_recommendations(raw: str) -> tuple[list[ProposedItem], dict[str, Any]
             disc = Decimal(str(rec.get("discount_pct", "0")))
             proposed.append(ProposedItem(product_id=pid, discount_pct=disc))
         except (KeyError, ValueError, TypeError, InvalidOperation) as exc:
-            logger.warning(
-                "Skipping malformed recommendation", extra={"rec": rec, "error": str(exc)}
+            slogger.warning(
+                "DETAILED_LOG: Skipping malformed recommendation",
+                rec=rec,
+                error=str(exc),
             )
 
+    slogger.info(
+        "DETAILED_LOG: Parsing completed successfully",
+        proposed_count=len(proposed),
+        proposed_items=[{"product_id": p.product_id, "discount_pct": str(p.discount_pct)} for p in proposed],
+    )
     return proposed, raw_output
 
 
@@ -129,11 +153,25 @@ async def _call_gemini(
         generation_config=GenerationConfig(
             response_mime_type="application/json",
             temperature=0.3,
-            max_output_tokens=512,
+            max_output_tokens=2048,
         ),
     )
 
     prompt = _build_user_prompt(cart_items, catalog_items)
+    cart_pids = {item.get("product_id") for item in cart_items if "product_id" in item}
+    catalog_subset = [
+        {"id": p["id"], "name": p["name"], "price": p["price"], "category": p["category"]}
+        for p in catalog_items
+        if not p.get("is_demo_fixture", False) and p.get("id") not in cart_pids
+    ]
+    slogger.info(
+        "DETAILED_LOG: Calling Gemini LLM",
+        cart_items=cart_items,
+        catalog_subset_count=len(catalog_subset),
+        catalog_subset=catalog_subset,
+        prompt_text=prompt,
+        model_name=settings.GEMINI_MODEL,
+    )
     response = await model.generate_content_async(prompt)
     raw_text = response.text or ""
     return _parse_recommendations(raw_text)
@@ -157,7 +195,7 @@ async def _call_openai(
         ],
         response_format={"type": "json_object"},
         temperature=0.3,
-        max_tokens=512,
+        max_tokens=2048,
     )
     raw_text = response.choices[0].message.content or ""
     return _parse_recommendations(raw_text)
@@ -178,14 +216,14 @@ async def get_proposals(
         catalog_items: Full catalog (demo fixtures will be excluded internally).
 
     Returns:
-        (proposed_items, raw_llm_output) â€” raw output is stored verbatim in audit log.
+        (proposed_items, raw_llm_output) — raw output is stored verbatim in audit log.
 
     Note:
         This function NEVER raises. On any LLM failure it returns ([], error_dict).
         The caller (proposals router) handles the empty case gracefully.
     """
     if not cart_items:
-        logger.info("Skipping agent call â€” cart is empty")
+        logger.info("Skipping agent call — cart is empty")
         return [], {"skipped": "empty cart"}
 
     try:
@@ -197,6 +235,5 @@ async def get_proposals(
             logger.error("Unknown LLM provider", extra={"provider": settings.LLM_PROVIDER})
             return [], {"error": f"Unknown provider: {settings.LLM_PROVIDER}"}
     except Exception as exc:  # noqa: BLE001
-        logger.exception("LLM call failed", extra={"error": str(exc)})
+        slogger.exception("DETAILED_LOG: LLM call failed with exception", extra={"error": str(exc), "exc_type": type(exc).__name__})
         return [], {"error": str(exc)}
-

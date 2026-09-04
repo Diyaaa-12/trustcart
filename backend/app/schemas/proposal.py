@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -12,14 +11,14 @@ from pydantic import BaseModel, ConfigDict
 class AcceptedItemOut(BaseModel):
     product_id: int
     product_name: str
-    original_price: Decimal
-    discount_pct: Decimal
-    discounted_price: Decimal
+    original_price: float
+    discount_pct: float
+    discounted_price: float
 
 
 class RejectedItemOut(BaseModel):
     product_id: int
-    proposed_discount_pct: Decimal
+    proposed_discount_pct: float
     reason: str
     detail: str
 

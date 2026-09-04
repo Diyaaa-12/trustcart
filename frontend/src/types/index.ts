@@ -1,4 +1,4 @@
-﻿/** Shared TypeScript types mirroring the backend schemas. */
+/** Shared TypeScript types mirroring the backend schemas. */
 
 export interface Product {
   id: number;
@@ -71,7 +71,7 @@ export interface CounterfactualComparison {
 export interface Proposal {
   id: string;
   session_id: string;
-  gate_result: 'accepted' | 'rejected' | 'partial';
+  gate_result: 'accepted' | 'rejected' | 'partial' | 'no_proposals' | 'mandate_invalid' | 'mandate_expired';
   accepted_items: AcceptedItem[];
   rejected_items: RejectedItem[];
   user_action: 'pending' | 'review_required' | 'reviewed' | 'accepted' | 'declined';
@@ -119,7 +119,7 @@ export interface DecisionFactor {
 export interface DecisionExplanation {
   proposal_id: string;
   session_id: string;
-  gate_result: 'accepted' | 'rejected' | 'partial';
+  gate_result: 'accepted' | 'rejected' | 'partial' | 'no_proposals' | 'mandate_invalid' | 'mandate_expired';
   summary: string;
   explanation: string;
   mandate_fingerprint?: string;
