@@ -31,7 +31,7 @@ TrustCart enforces strict separation of concerns between AI generation and safet
                                    │
                                    ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ 3. Agent Layer (LLM: Gemini 2.5 Flash / OpenAI)                           │
+│ 3. Agent Layer (LLM: Gemini 3.6 Flash / OpenAI)                           │
 │    - Proposes 1-3 complementary items with discounts                      │
 │    - Deterministic structured JSON output mode                            │
 │    - Raw output captured verbatim for counterfactual audit                │
@@ -116,7 +116,13 @@ Modern LLMs are stochastic and fundamentally vulnerable to adversarial prompt in
 - **Action Boundary Invariant**: The injected promotion **never** appears in `accepted_items` and cannot be added to cart or checked out.
 - **Amplified Trust Degradation**: The rejection matches an injection signature, triggering amplified decay (-15.0 pts) degrading the trust score from 100.0 to 85.0.
 
----
+### 5. Atomic Cart Quantity Stepper (`PATCH /api/cart/{session_id}/items/{item_id}`)
+- Solves a client-side mutation race condition where rapid consecutive clicks (+ / -) read stale locally-rendered state and fired concurrent mutations racing out of order.
+- Replaced full-cart replacement payloads with an atomic quantity update endpoint that recomputes subtotals, item totals, and remaining session budget strictly server-side, paired with per-item UI action locking to guarantee serialized, deterministic cart mutations.
+
+### 6. In-Place Mandate Refresh (`POST /api/cart/{session_id}/mandate/refresh`)
+- Allows seamless recovery when a session's cryptographic `SpendMandate` expires without dropping or clearing the user's active cart.
+- Atomically generates and signs a fresh HMAC-SHA256 mandate for the current cart state and session TTL, transitioning authorization status cleanly and re-enabling proposal evaluation without losing customer items.
 
 ---
 
@@ -130,6 +136,8 @@ Modern LLMs are stochastic and fundamentally vulnerable to adversarial prompt in
    - CORS is strictly bounded to the frontend application origin via `settings.CORS_ORIGINS` (defaulting to Vite ports `5173`/`3000` and `frontend:5173`), configurable via environment variables rather than wildcard `*`.
 4. **Health Check Probes**:
    - Dual liveness/readiness probes are exposed at `GET /health` and `GET /healthz` for Kubernetes and Docker engine status monitoring.
+5. **Inventory Decrement & Concurrency**:
+   - Stock is validated against on proposals but not decremented on purchase — no inventory reservation or concurrency handling; scoped out for the 3-day build.
 
 ---
 
@@ -158,6 +166,10 @@ Modern LLMs are stochastic and fundamentally vulnerable to adversarial prompt in
 - **Issue**: Tests using distinct in-memory SQLite engines clashed when FastAPI routes were called via `client.get`, while direct route unit tests required direct session injection.
 - **Fix**: Consolidated shared test fixtures and added dual integration verification (both direct asynchronous route handler invocation and ASGI client HTTP dispatch).
 
+### 5. Gemini Model Deprecation & Token-Limit JSON Truncation
+- **Issue**: `gemini-2.5-flash` was deprecated mid-build and required a model change plus a token-limit fix (JSON responses were being truncated at the old `max_output_tokens=512`), which caused silent `JSONDecodeError` parsing failures that improperly dropped valid cross-sell candidates to `no_proposals`.
+- **Fix**: Migrated to `gemini-3.6-flash` and increased `max_output_tokens` to 2048 across agent calls, ensuring full structured proposal JSON is generated, validated, and passed to the policy gate without truncation.
+
 ---
 
 ## Local Setup & Quickstart
@@ -177,7 +189,7 @@ Edit `.env` to configure your API keys:
 # LLM Configuration (Gemini or OpenAI)
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.6-flash
 
 # Razorpay Configuration (Leave empty to enable mock checkout mode)
 RAZORPAY_KEY_ID=
@@ -197,7 +209,7 @@ Services will be available at:
 
 ### 3. Run the Test Suite & Quality Checks
 ```bash
-# Run all 141 automated tests with coverage
+# Run all 150 automated tests with coverage
 cd backend
 pytest -v --tb=short --cov=app --cov-report=term-missing
 
@@ -222,6 +234,7 @@ Tests:
   - tests/test_policy_gate.py:            33 passed
   - tests/test_mandate.py:                21 passed
   - tests/test_decision_explanation.py:   16 passed
+  - tests/test_small_cart_proposals.py:    9 passed
   - tests/test_rate_limiter.py:            7 passed
   - tests/test_checkout.py:                7 passed
   - tests/test_audit.py:                   6 passed
@@ -229,7 +242,7 @@ Tests:
   - tests/test_trust_adaptive_autonomy.py: 5 passed
   - tests/test_prompt_injection.py:        4 passed
 ----------------------------------------------------------------------------------
-Total:                                   141 PASSED (100% success rate, 0 regressions)
+Total:                                   150 PASSED (100% success rate, 0 regressions)
 
 Statement Coverage Highlights:
   - app/services/mandate.py:              100%

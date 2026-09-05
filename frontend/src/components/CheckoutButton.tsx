@@ -8,14 +8,91 @@ interface Props {
   sessionId: string;
 }
 
+interface RazorpayPaymentSuccessResponse {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}
+
+interface RazorpayPaymentFailedResponse {
+  error: {
+    code?: string;
+    description?: string;
+    source?: string;
+    step?: string;
+    reason?: string;
+    metadata?: {
+      order_id?: string;
+      payment_id?: string;
+    };
+  };
+}
+
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description?: string;
+  order_id: string;
+  handler: (response: RazorpayPaymentSuccessResponse) => void;
+  modal?: {
+    ondismiss?: () => void;
+    escape?: boolean;
+    backdropclose?: boolean;
+  };
+  theme?: {
+    color?: string;
+  };
+}
+
+interface RazorpayInstance {
+  open(): void;
+  on(event: 'payment.failed', handler: (response: RazorpayPaymentFailedResponse) => void): void;
+}
+
 const formatINR = (n: number | string) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(n) || 0);
 
 type CheckoutState = 'idle' | 'loading' | 'success' | 'error';
 
+const loadRazorpayScript = (): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (typeof (window as unknown as { Razorpay?: unknown }).Razorpay !== 'undefined') {
+      resolve(true);
+      return;
+    }
+
+    const scriptSrc = 'https://checkout.razorpay.com/v1/checkout.js';
+    const existing = document.querySelector(`script[src="${scriptSrc}"]`);
+    if (existing) {
+      if ((existing as HTMLScriptElement).dataset.loaded === 'true') {
+        resolve(true);
+        return;
+      }
+      existing.addEventListener('load', () => resolve(true));
+      existing.addEventListener('error', () => resolve(false));
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = scriptSrc;
+    script.async = true;
+    script.onload = () => {
+      script.dataset.loaded = 'true';
+      resolve(true);
+    };
+    script.onerror = () => {
+      resolve(false);
+    };
+    document.body.appendChild(script);
+  });
+};
+
 export default function CheckoutButton({ cart, sessionId }: Props) {
   const [state, setState] = useState<CheckoutState>('idle');
   const [result, setResult] = useState<CheckoutResult | null>(null);
+  const [paymentId, setPaymentId] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
 
   const canCheckout = (cart?.item_count ?? 0) > 0;
@@ -27,30 +104,72 @@ export default function CheckoutButton({ cart, sessionId }: Props) {
       const order = await createCheckout(sessionId);
       setResult(order);
 
-      if (order.mock_mode) {
-        // Mock mode -- show success state directly
+      if (order.mock_mode || !order.razorpay_key_id || order.razorpay_key_id === 'mock') {
+        // Mock mode -- show success state directly (keep mock-mode fallback unchanged)
         setState('success');
         return;
       }
 
-      // Real Razorpay mode -- open checkout modal
-      if (typeof (window as unknown as Record<string, unknown>)['Razorpay'] !== 'undefined') {
-        const Razorpay = (window as unknown as Record<string, unknown>)['Razorpay'] as new (opts: unknown) => { open(): void };
-        const rzp = new Razorpay({
-          key: order.razorpay_key_id,
-          amount: order.amount_paise,
-          currency: order.currency,
-          order_id: order.order_id,
-          name: 'TrustCart',
-          description: 'Your TrustCart Order',
-          theme: { color: '#14B8A6' },
-          handler: () => setState('success'),
-        });
-        rzp.open();
-      } else {
-        // Razorpay.js not loaded -- show order ID
-        setState('success');
+      // Real / test-mode Razorpay checkout
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        setErrorMsg('Failed to load Razorpay checkout script. Please check your network connection.');
+        setState('error');
+        return;
       }
+
+      const RazorpayConstructor = (window as unknown as {
+        Razorpay: new (opts: RazorpayOptions) => RazorpayInstance;
+      }).Razorpay;
+
+      if (!RazorpayConstructor) {
+        setErrorMsg('Razorpay payment gateway is not initialized.');
+        setState('error');
+        return;
+      }
+
+      const keyId =
+        ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_RAZORPAY_KEY_ID) ||
+        order.razorpay_key_id;
+
+      let paymentHandled = false;
+
+      const options: RazorpayOptions = {
+        key: keyId,
+        amount: order.amount_paise,
+        currency: order.currency || 'INR',
+        name: 'TrustCart',
+        description: `Order Settlement (${order.order_id})`,
+        order_id: order.order_id,
+        handler: (response: RazorpayPaymentSuccessResponse) => {
+          paymentHandled = true;
+          setPaymentId(response.razorpay_payment_id);
+          setState('success');
+        },
+        modal: {
+          ondismiss: () => {
+            if (!paymentHandled) {
+              setState('error');
+              setErrorMsg('Payment was cancelled -- the checkout window was closed before completion.');
+            }
+          },
+          escape: true,
+          backdropclose: false,
+        },
+        theme: {
+          color: '#14B8A6',
+        },
+      };
+
+      const rzp = new RazorpayConstructor(options);
+      rzp.on('payment.failed', (response: RazorpayPaymentFailedResponse) => {
+        paymentHandled = true;
+        const desc = response?.error?.description || response?.error?.reason || 'Payment was declined or failed.';
+        setErrorMsg(`Payment Failed: ${desc}`);
+        setState('error');
+      });
+
+      rzp.open();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string | { error?: string } } } })
         ?.response?.data?.detail;
@@ -68,6 +187,7 @@ export default function CheckoutButton({ cart, sessionId }: Props) {
   const handleRetry = () => {
     setState('idle');
     setResult(null);
+    setPaymentId('');
     setErrorMsg('');
   };
 
@@ -82,14 +202,36 @@ export default function CheckoutButton({ cart, sessionId }: Props) {
         <CheckCircle size={32} style={{ color: 'var(--success)' }} />
         <div>
           <div className="text-base font-semi" style={{ color: 'var(--success)' }}>
-            {result.mock_mode ? 'Demo Order Created!' : 'Order Placed!'}
+            {result.mock_mode ? 'Demo Order Created!' : 'Payment Successful!'}
           </div>
           <div className="text-xs text-muted" style={{ marginTop: 4 }}>
             Order ID: <code style={{ color: 'var(--text-secondary)' }}>{result.order_id}</code>
           </div>
-          {result.mock_mode && (
+          {paymentId && (
+            <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+              Payment ID: <code style={{ color: 'var(--text-secondary)' }}>{paymentId}</code>
+            </div>
+          )}
+          {result.mock_mode ? (
             <div className="badge badge-warning" style={{ marginTop: 8 }}>
               Mock Mode -- add Razorpay keys to .env for real payments
+            </div>
+          ) : (
+            <div style={{
+              marginTop: 8,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '0.25rem 0.65rem',
+              borderRadius: 6,
+              background: 'rgba(16,185,129,0.12)',
+              border: '1px solid rgba(16,185,129,0.25)',
+              color: 'var(--success)',
+              fontSize: '0.75rem',
+              fontWeight: 500,
+            }}>
+              <ShieldCheck size={13} />
+              <span>Razorpay Payment Verified</span>
             </div>
           )}
         </div>
@@ -105,7 +247,7 @@ export default function CheckoutButton({ cart, sessionId }: Props) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
           <AlertCircle size={16} style={{ color: 'var(--danger)' }} />
-          <span className="text-sm font-semi" style={{ color: 'var(--danger)' }}>Payment Failed</span>
+          <span className="text-sm font-semi" style={{ color: 'var(--danger)' }}>Payment Incomplete</span>
         </div>
         <div className="text-xs" style={{ color: 'var(--text-secondary)', marginBottom: '0.875rem', lineHeight: 1.5 }}>
           {errorMsg}
@@ -171,6 +313,12 @@ export default function CheckoutButton({ cart, sessionId }: Props) {
           <><CreditCard size={17} /> Pay with Razorpay</>
         )}
       </button>
+
+      {canCheckout && (
+        <div className="text-xs text-muted" style={{ textAlign: 'center', fontSize: '0.72rem' }}>
+          Test card: <code>4111 1111 1111 1111</code> {"\u00B7"} Any future expiry {"\u00B7"} Any CVV
+        </div>
+      )}
 
       {!canCheckout && (
         <div className="text-xs text-muted" style={{ textAlign: 'center' }}>
