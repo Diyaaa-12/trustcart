@@ -1,10 +1,5 @@
 # TrustCart - Bounded, Auditable Upsell/Cross-Sell Agent
 
-> **Razorpay AI Buildathon 2026** - *Agentic Commerce Track*  
-> An autonomous e-commerce recommendation system built on bounded autonomy, deterministic policy gates, cryptographic spend mandates, trust-adaptive friction tiers, machine-readable agent catalogs, and plain-language decision explainability.
-
----
-
 ## Architecture: The End-to-End Governance Pipeline
 
 TrustCart enforces strict separation of concerns between AI generation and safety enforcement. The system operates in a unidirectional multi-layer pipeline where the LLM is treated as an untrusted candidate generator:
