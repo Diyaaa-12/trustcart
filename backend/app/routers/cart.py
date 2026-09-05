@@ -301,7 +301,7 @@ async def update_item_quantity(
         await _write_audit(db, session_id, "cart.item_removed", {"product_id": product_id})
     else:
         product_result = await db.execute(
-            select(Product).where(Product.id == product_id, Product.is_active == True)
+            select(Product).where(Product.id == product_id, Product.is_active.is_(True))
         )
         product = product_result.scalar_one_or_none()
         if product is None:

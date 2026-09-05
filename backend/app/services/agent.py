@@ -14,9 +14,10 @@ Key design:
 """
 import json
 import logging
-import structlog
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+import structlog
 
 from app.config import settings
 from app.services.policy_gate import ProposedItem
@@ -130,7 +131,10 @@ def _parse_recommendations(raw: str) -> tuple[list[ProposedItem], dict[str, Any]
     slogger.info(
         "DETAILED_LOG: Parsing completed successfully",
         proposed_count=len(proposed),
-        proposed_items=[{"product_id": p.product_id, "discount_pct": str(p.discount_pct)} for p in proposed],
+        proposed_items=[
+            {"product_id": p.product_id, "discount_pct": str(p.discount_pct)}
+            for p in proposed
+        ],
     )
     return proposed, raw_output
 
@@ -235,5 +239,8 @@ async def get_proposals(
             logger.error("Unknown LLM provider", extra={"provider": settings.LLM_PROVIDER})
             return [], {"error": f"Unknown provider: {settings.LLM_PROVIDER}"}
     except Exception as exc:  # noqa: BLE001
-        slogger.exception("DETAILED_LOG: LLM call failed with exception", extra={"error": str(exc), "exc_type": type(exc).__name__})
+        slogger.exception(
+            "DETAILED_LOG: LLM call failed with exception",
+            extra={"error": str(exc), "exc_type": type(exc).__name__},
+        )
         return [], {"error": str(exc)}

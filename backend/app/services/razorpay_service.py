@@ -25,7 +25,7 @@ class RazorpayServiceError(Exception):
 
 def _create_order_sync(key_id: str, key_secret: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Synchronous Razorpay call â€” run in thread pool."""
-    import razorpay
+    import razorpay  # type: ignore[import-untyped]
 
     client = razorpay.Client(auth=(key_id, key_secret))
     return client.order.create(data=payload)  # type: ignore[no-any-return]

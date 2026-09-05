@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.database import Base, get_db
 from app.main import app
-from app.models.cart import CartItem, CartSession
+from app.models.cart import CartSession
 from app.models.product import Product
 from app.services.policy_gate import (
     CatalogProduct,
@@ -61,11 +61,26 @@ class TestSmallCartCandidateSelection:
     @pytest.fixture
     def sample_catalog(self):
         return {
-            1: CatalogProduct(id=1, name="Headphones", price=Decimal("5000"), category="Electronics", stock=10, is_active=True),
-            2: CatalogProduct(id=2, name="Laptop Sleeve", price=Decimal("900"), category="Accessories", stock=50, is_active=True),
-            3: CatalogProduct(id=3, name="Clean Code", price=Decimal("1200"), category="Books", stock=30, is_active=True),
-            4: CatalogProduct(id=4, name="T-Shirt", price=Decimal("800"), category="Clothing", stock=40, is_active=True),
-            5: CatalogProduct(id=5, name="Running Shoes", price=Decimal("3500"), category="Footwear", stock=25, is_active=True),
+            1: CatalogProduct(
+                id=1, name="Headphones", price=Decimal("5000"),
+                category="Electronics", stock=10, is_active=True,
+            ),
+            2: CatalogProduct(
+                id=2, name="Laptop Sleeve", price=Decimal("900"),
+                category="Accessories", stock=50, is_active=True,
+            ),
+            3: CatalogProduct(
+                id=3, name="Clean Code", price=Decimal("1200"),
+                category="Books", stock=30, is_active=True,
+            ),
+            4: CatalogProduct(
+                id=4, name="T-Shirt", price=Decimal("800"),
+                category="Clothing", stock=40, is_active=True,
+            ),
+            5: CatalogProduct(
+                id=5, name="Running Shoes", price=Decimal("3500"),
+                category="Footwear", stock=25, is_active=True,
+            ),
         }
 
     def test_single_item_electronics_cart_accepts_cross_sell_candidates(
@@ -76,7 +91,10 @@ class TestSmallCartCandidateSelection:
         from mapped categories (Accessories, Books) as well as same-category items.
         """
         cart_items = [
-            {"product_id": 1, "name": "Headphones", "category": "Electronics", "quantity": 1, "unit_price": 5000.0}
+            {
+                "product_id": 1, "name": "Headphones",
+                "category": "Electronics", "quantity": 1, "unit_price": 5000.0,
+            }
         ]
 
         # Propose 1 Accessories (ID 2) and 1 Books (ID 3)
@@ -107,7 +125,10 @@ class TestSmallCartCandidateSelection:
         not unpurchased candidates (2, 3).
         """
         cart_items = [
-            {"product_id": 1, "name": "Headphones", "category": "Electronics", "quantity": 1, "unit_price": 5000.0}
+            {
+                "product_id": 1, "name": "Headphones",
+                "category": "Electronics", "quantity": 1, "unit_price": 5000.0,
+            }
         ]
 
         proposed = [
@@ -136,7 +157,10 @@ class TestSmallCartCandidateSelection:
         For a cart with only Electronics, Clothing is not an authorized cross-sell.
         """
         cart_items = [
-            {"product_id": 1, "name": "Headphones", "category": "Electronics", "quantity": 1, "unit_price": 5000.0}
+            {
+                "product_id": 1, "name": "Headphones",
+                "category": "Electronics", "quantity": 1, "unit_price": 5000.0,
+            }
         ]
 
         proposed = [
@@ -163,7 +187,10 @@ class TestSmallCartCandidateSelection:
         rejected with ALREADY_IN_CART, producing 0 accepted items.
         """
         cart_items = [
-            {"product_id": pid, "name": p.name, "category": p.category, "quantity": 1, "unit_price": float(p.price)}
+            {
+                "product_id": pid, "name": p.name,
+                "category": p.category, "quantity": 1, "unit_price": float(p.price),
+            }
             for pid, p in sample_catalog.items()
         ]
 
@@ -191,9 +218,18 @@ class TestSmallCartAndQuantityEndpoints:
     @pytest_asyncio.fixture
     async def seeded_catalog(self):
         async with TestSessionLocal() as db:
-            p1 = Product(id=1, name="Headphones", price=Decimal("5000"), category="Electronics", stock=20, is_active=True)
-            p2 = Product(id=2, name="Laptop Sleeve", price=Decimal("900"), category="Accessories", stock=50, is_active=True)
-            p3 = Product(id=3, name="Clean Code", price=Decimal("1200"), category="Books", stock=30, is_active=True)
+            p1 = Product(
+                id=1, name="Headphones", price=Decimal("5000"),
+                category="Electronics", stock=20, is_active=True,
+            )
+            p2 = Product(
+                id=2, name="Laptop Sleeve", price=Decimal("900"),
+                category="Accessories", stock=50, is_active=True,
+            )
+            p3 = Product(
+                id=3, name="Clean Code", price=Decimal("1200"),
+                category="Books", stock=30, is_active=True,
+            )
             db.add_all([p1, p2, p3])
             await db.commit()
 
@@ -209,7 +245,9 @@ class TestSmallCartAndQuantityEndpoints:
         session_id = cart_res.json()["session_id"]
 
         # 2. Add 1 Electronics item
-        add_res = await client.post(f"/api/cart/{session_id}/items", json={"product_id": 1, "quantity": 1})
+        add_res = await client.post(
+            f"/api/cart/{session_id}/items", json={"product_id": 1, "quantity": 1}
+        )
         assert add_res.status_code == 200
         cart_data = add_res.json()
         assert len(cart_data["items"]) == 1
@@ -217,7 +255,8 @@ class TestSmallCartAndQuantityEndpoints:
 
         # 3. Request proposals with complementary item from Accessories
         mock_proposed = [ProposedItem(product_id=2, discount_pct=Decimal("8.0"))]
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        mock_fn = AsyncMock(return_value=(mock_proposed, {}))
+        with patch("app.routers.proposals.get_proposals", new=mock_fn):
             prop_res = await client.post(f"/api/proposals/{session_id}")
             assert prop_res.status_code == 201
             prop_data = prop_res.json()
@@ -288,10 +327,11 @@ class TestSmallCartAndQuantityEndpoints:
         must NEVER be classified as 'no_proposals' (neutral state).
         It must be an explicit mandate failure state ('mandate_expired').
         """
-        from datetime import UTC, datetime, timedelta
         import uuid
-        from app.services.mandate import sign_mandate
+        from datetime import UTC, datetime, timedelta
+
         from app.config import settings
+        from app.services.mandate import sign_mandate
 
         # 1. Create cart and add item
         cart_res = await client.post("/api/cart")
@@ -329,10 +369,11 @@ class TestSmallCartAndQuantityEndpoints:
         POST /api/cart/{session_id}/mandate/refresh reissues a valid mandate
         for the SAME session without losing cart items, logging mandate.reissued.
         """
-        from datetime import UTC, datetime, timedelta
         import uuid
-        from app.services.mandate import sign_mandate
+        from datetime import UTC, datetime, timedelta
+
         from app.config import settings
+        from app.services.mandate import sign_mandate
 
         # 1. Create cart and add 2 items
         cart_res = await client.post("/api/cart")
@@ -360,7 +401,8 @@ class TestSmallCartAndQuantityEndpoints:
 
         # 4. Request proposals with active mandate -> accepted!
         mock_proposed = [ProposedItem(product_id=2, discount_pct=Decimal("5.0"))]
-        with patch("app.routers.proposals.get_proposals", new=AsyncMock(return_value=(mock_proposed, {}))):
+        mock_fn = AsyncMock(return_value=(mock_proposed, {}))
+        with patch("app.routers.proposals.get_proposals", new=mock_fn):
             prop_res = await client.post(f"/api/proposals/{sid}")
             assert prop_res.status_code == 201
             prop_data = prop_res.json()

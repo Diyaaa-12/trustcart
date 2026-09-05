@@ -14,11 +14,11 @@ Key invariants:
 from __future__ import annotations
 
 import logging
-import structlog
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -255,7 +255,10 @@ async def generate_proposals(
         "DETAILED_LOG: What reached policy_gate.py",
         session_id=str(session_id),
         proposed_items_count=len(proposed_items),
-        proposed_items=[{"product_id": i.product_id, "discount_pct": str(i.discount_pct)} for i in proposed_items],
+        proposed_items=[
+            {"product_id": i.product_id, "discount_pct": str(i.discount_pct)}
+            for i in proposed_items
+        ],
         llm_raw_output=llm_raw,
         cart_items=cart_items_data,
     )
@@ -273,9 +276,15 @@ async def generate_proposals(
         "DETAILED_LOG: policy_gate.py evaluation results",
         session_id=str(session_id),
         accepted_count=len(gate_result.accepted_items),
-        accepted_items=[{"product_id": a.product_id, "discount_pct": str(a.discount_pct)} for a in gate_result.accepted_items],
+        accepted_items=[
+            {"product_id": a.product_id, "discount_pct": str(a.discount_pct)}
+            for a in gate_result.accepted_items
+        ],
         rejected_count=len(gate_result.rejected_items),
-        rejected_items=[{"product_id": r.product_id, "reason": r.reason.value, "detail": r.detail} for r in gate_result.rejected_items],
+        rejected_items=[
+            {"product_id": r.product_id, "reason": r.reason.value, "detail": r.detail}
+            for r in gate_result.rejected_items
+        ],
     )
     gate_label = _gate_result_label(
         len(gate_result.accepted_items),
@@ -392,9 +401,15 @@ async def generate_proposals(
 
     if not is_m_valid:
         if m_reason == "mandate_expired":
-            summary_msg = "Evaluation blocked: AP2 spend mandate has expired. Reissue authorization to continue."
+            summary_msg = (
+                "Evaluation blocked: AP2 spend mandate has expired. "
+                "Reissue authorization to continue."
+            )
         else:
-            summary_msg = "Evaluation blocked: Cryptographic spend mandate signature verification failed or tampered."
+            summary_msg = (
+                "Evaluation blocked: Cryptographic spend mandate signature "
+                "verification failed or tampered."
+            )
     elif len(proposed_items) == 0:
         summary_msg = "Agent proposed 0 items; nothing to evaluate."
     elif len(rejected_out) > 0:
